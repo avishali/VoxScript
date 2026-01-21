@@ -19,6 +19,9 @@
 namespace VoxScript
 {
 
+// Forward declaration
+class VoxScriptDocumentController;
+
 /**
  * @brief The Script View - Semantic editing layer
  * 
@@ -35,7 +38,8 @@ namespace VoxScript
  * - Non-speech tokens (<breath>, <silence>)
  * - Confidence underlining for low-confidence words
  */
-class ScriptView : public juce::Component
+class ScriptView : public juce::Component,
+                   private juce::Timer
 {
 public:
     //==========================================================================
@@ -65,12 +69,23 @@ public:
      * Clear all text
      */
     void clear();
+    
+    /**
+     * Set the document controller for status polling (Phase III)
+     */
+    void setDocumentController(VoxScriptDocumentController* controller);
 
 private:
+    //==========================================================================
+    // Timer callback for status polling (Phase III temporary solution)
+    void timerCallback() override;
     //==========================================================================
     // Phase II: Display members
     juce::String displayText;
     juce::String statusText;
+    
+    // Phase III: Document controller for status polling
+    VoxScriptDocumentController* documentController = nullptr;
     
     // Phase II: Will add:
     // - TextEditor for interactive editing

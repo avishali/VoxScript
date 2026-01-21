@@ -17,6 +17,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "../transcription/WhisperEngine.h"
 #include "../transcription/VoxSequence.h"
+#include "../transcription/AudioExtractor.h"
 
 namespace VoxScript
 {
@@ -48,8 +49,13 @@ public:
     // ARA Document Controller overrides
     
     /**
-     * Called when a new audio source is added to the document
+     * Called after an audio source is added to the document
      * This is where we spawn the analysis thread for transcription
+     */
+    void didAddAudioSourceToDocument (juce::ARADocument* document, juce::ARAAudioSource* audioSource) override;
+
+    /**
+     * Called when a new audio source is created
      */
     juce::ARAAudioSource* doCreateAudioSource (juce::ARADocument* document,
                                                ARA::ARAAudioSourceHostRef hostRef) noexcept override;
@@ -132,6 +138,12 @@ public:
     void removeListener (Listener* listener);
     
     //==========================================================================
+    // WhisperEngine::Listener overrides
+    void transcriptionProgress (float progress) override;
+    void transcriptionComplete (VoxSequence sequence) override;
+    void transcriptionFailed (const juce::String& error) override;
+
+    //==========================================================================
     // Phase II: Transcription API
     
     /** Get the current transcription result. */
@@ -140,20 +152,18 @@ public:
     /** Get the current transcription status message. */
     juce::String getTranscriptionStatus() const { return transcriptionStatus; }
 
-private:
-    //==========================================================================
-    // WhisperEngine::Listener overrides
-    void transcriptionProgress (float progress) override;
-    void transcriptionComplete (VoxSequence sequence) override;
-    void transcriptionFailed (const juce::String& error) override;
+    private:
+    void cleanupTempFile();
     
     //==========================================================================
     juce::ListenerList<Listener> listeners;
     
-    // Phase II: Transcription members
+    // Phase II/III: Transcription and Audio Extraction
     WhisperEngine whisperEngine;
+    AudioExtractor audioExtractor;
     VoxSequence currentTranscription;
     juce::String transcriptionStatus = "Idle";
+    juce::File currentTempFile;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptDocumentController)
 };

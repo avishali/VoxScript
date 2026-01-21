@@ -76,16 +76,6 @@ public:
     float getTranscriptionProgress() const;
     
     //==========================================================================
-    // Phase III Test
-    
-    /**
-     * Test AudioExtractor functionality
-     * Extracts audio and verifies output format
-     */
-    void testAudioExtractor();
-
-private:
-    //==========================================================================
     // Phase I: Placeholder for future transcription data
     // Phase II: Will add VoxSequence member, analysis thread, etc.
     

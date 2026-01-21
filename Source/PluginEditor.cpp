@@ -19,6 +19,9 @@ VoxScriptAudioProcessorEditor::VoxScriptAudioProcessorEditor (VoxScriptAudioProc
     if (auto* controller = processorRef.getVoxScriptDocumentController())
     {
         controller->addListener (this);
+        
+        // Phase III: Connect ScriptView to DocumentController for status polling
+        scriptView.setDocumentController (controller);
     }
     
     // Setup header

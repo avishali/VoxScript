@@ -31,23 +31,38 @@ juce::ARAAudioSource* VoxScriptDocumentController::doCreateAudioSource (
     juce::ARADocument* document,
     ARA::ARAAudioSourceHostRef hostRef) noexcept
 {
-    DBG ("================================================");
     DBG ("VOXSCRIPT: Creating Audio Source");
-    DBG ("Document: " + juce::String::toHexString ((juce::pointer_sized_int) document));
-    DBG ("HostRef: " + juce::String::toHexString ((juce::pointer_sized_int) hostRef));
-    DBG ("================================================");
     
     // Create our custom audio source wrapper
     auto* audioSource = new VoxScriptAudioSource (document, hostRef);
     
-    // Phase II: Trigger transcription when audio source added
-    // Note: We need to access the file path from the audio source
-    // For now, we'll defer transcription until we have persistent sample access
+    // Register as listener for transcription events
     whisperEngine.addListener (this);
     
-    DBG ("VoxScriptDocumentController: Audio source created, transcription engine ready");
-    
     return audioSource;
+}
+
+void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument* document, juce::ARAAudioSource* audioSource)
+{
+    juce::ignoreUnused (document);
+    DBG ("VoxScriptDocumentController::didAddAudioSourceToDocument called");
+    
+    // Extract audio to temporary WAV file for transcription
+    transcriptionStatus = "Extracting audio...";
+    currentTempFile = audioExtractor.extractToTempWAV (audioSource);
+    
+    if (!currentTempFile.existsAsFile())
+    {
+        transcriptionStatus = "Failed: Could not extract audio";
+        DBG ("AudioExtractor failed to create temp file");
+        return;
+    }
+    
+    DBG ("Audio extracted to: " + currentTempFile.getFullPathName());
+    
+    // Trigger transcription
+    transcriptionStatus = "Starting transcription...";
+    whisperEngine.transcribeAudioFile (currentTempFile);
 }
 
 void VoxScriptDocumentController::doDestroyAudioSource (
@@ -65,25 +80,9 @@ juce::ARAAudioModification* VoxScriptDocumentController::doCreateAudioModificati
     ARA::ARAAudioModificationHostRef hostRef,
     const juce::ARAAudioModification* optionalModificationToClone) noexcept
 {
-    DBG ("================================================");
-    DBG ("VOXSCRIPT: Creating Audio Modification");
-    DBG ("Source: " + juce::String::toHexString ((juce::pointer_sized_int) audioSource));
-    DBG ("Clone: " + juce::String (optionalModificationToClone ? "YES" : "NO"));
-    DBG ("================================================");
+    DBG ("VoxScriptDocumentController::doCreateAudioModification called");
     
-    // Phase II: Try to trigger transcription when modification is created
-    // At this point, the audio source should have persistent sample access
-    // FIXME Phase III: Implement audio extraction from ARA persistent sample access
-    // The API for accessing properties in JUCE 8 ARA is different
-    // For now, this is a placeholder for future implementation
-    juce::ignoreUnused (audioSource);
-    
-    // TODO: Extract audio from ARA persistent sample reader
-    // TODO: Write to temporary WAV file
-    // TODO: Call whisperEngine.transcribeAudioFile(tempFile)
-    
-    // For now, use the default JUCE implementation
-    // In Phase III, we'll create a custom modification that stores VoxEditList
+    // In Phase III Task 2, we'll create a custom modification that stores VoxEditList
     return new juce::ARAAudioModification (audioSource, hostRef, optionalModificationToClone);
 }
 
@@ -101,23 +100,7 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
     juce::ARAAudioModification* modification,
     ARA::ARAPlaybackRegionHostRef hostRef) noexcept
 {
-    DBG ("================================================");
-    DBG ("VOXSCRIPT: Creating Playback Region");
-    DBG ("Modification: " + juce::String::toHexString ((juce::pointer_sized_int) modification));
-    DBG ("================================================");
-    
-    // Phase II: At this point we definitely have audio data available
-    // Try to extract file path and trigger transcription
-    // FIXME Phase III: Implement audio extraction from ARA persistent sample access
-    // The API for accessing properties in JUCE 8 ARA is different
-    // For now, this is a placeholder for future implementation
-    juce::ignoreUnused (modification);
-    
-    // TODO: Get audio source from modification
-    // TODO: Extract audio from ARA persistent sample reader
-    // TODO: Write to temporary WAV file
-    // TODO: Call whisperEngine.transcribeAudioFile(tempFile)
-    
+    DBG ("VoxScriptDocumentController::doCreatePlaybackRegion called");
     return new juce::ARAPlaybackRegion (modification, hostRef);
 }
 
@@ -197,34 +180,31 @@ void VoxScriptDocumentController::transcriptionProgress (float progress)
                           juce::String (int (progress * 100)) + "%";
     
     DBG ("VoxScriptDocumentController: Transcription progress: " + transcriptionStatus);
-    
-    // FIXME Phase III: Notify UI to repaint
 }
 
 void VoxScriptDocumentController::transcriptionComplete (VoxSequence sequence)
 {
     currentTranscription = sequence;
     transcriptionStatus = "Ready";
-    
-    DBG ("================================================");
-    DBG ("VOXSCRIPT: Transcription COMPLETE");
-    DBG ("Words: " + juce::String (sequence.getWordCount()));
-    DBG ("Duration: " + juce::String (sequence.getTotalDuration()) + " seconds");
-    DBG ("================================================");
-    
-    // FIXME Phase III: Notify UI to display new transcription
-    // For now, just log the text
-    DBG ("Transcription text: " + sequence.getFullText());
+    cleanupTempFile();
+    DBG ("Transcription complete: " + juce::String (sequence.getWordCount()) + " words");
 }
 
 void VoxScriptDocumentController::transcriptionFailed (const juce::String& error)
 {
     transcriptionStatus = "Failed: " + error;
-    
-    DBG ("================================================");
-    DBG ("VOXSCRIPT: Transcription FAILED");
-    DBG ("Error: " + error);
-    DBG ("================================================");
+    DBG ("Transcription error: " + error);
+    cleanupTempFile();
+}
+
+void VoxScriptDocumentController::cleanupTempFile()
+{
+    if (currentTempFile.existsAsFile())
+    {
+        DBG("Deleting temp file: " + currentTempFile.getFullPathName());
+        currentTempFile.deleteFile();
+        currentTempFile = juce::File();
+    }
 }
 
 } // namespace VoxScript
