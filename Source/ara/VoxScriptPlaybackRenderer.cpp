@@ -56,17 +56,80 @@ bool VoxScriptPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
                                              juce::AudioProcessor::Realtime realtime,
                                              const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
-    // Phase I: Use JUCE's default ARA rendering by calling the base class
-    // This will automatically handle reading from audio sources and rendering playback regions
+    // Clear buffer first
+    buffer.clear();
     
-    // Call the base class implementation which does the actual ARA rendering
-    return juce::ARAPlaybackRenderer::processBlock (buffer, realtime, positionInfo);
+    // Get playback regions
+    const auto& regions = getPlaybackRegions();
     
-    // Phase III: We'll override this completely to implement custom rendering:
-    //   - Read from VoxEditList
-    //   - Apply crossfades at edit points
-    //   - Synthesize room tone in gaps
-    //   - Phase-coherent splicing
+    if (regions.empty())
+    {
+        // No regions = no audio (silence)
+        return true;
+    }
+    
+    // Get current playback sample position from position info
+    if (!positionInfo.getTimeInSamples().hasValue())
+        return true;
+    
+    auto playbackSamplePosition = *positionInfo.getTimeInSamples();
+    
+    // Iterate through all playback regions and render them
+    for (auto* region : regions)
+    {
+        // Get region's time range in samples
+        auto regionStartInPlayback = region->getStartInPlaybackSamples (currentSampleRate);
+        auto regionEndInPlayback = region->getEndInPlaybackSamples (currentSampleRate);
+        
+        // Check if this region overlaps with current buffer
+        auto bufferStart = playbackSamplePosition;
+        auto bufferEnd = playbackSamplePosition + buffer.getNumSamples();
+        
+        if (regionEndInPlayback <= bufferStart || regionStartInPlayback >= bufferEnd)
+            continue; // Region not in range
+        
+        // Calculate overlap
+        auto overlapStart = juce::jmax(regionStartInPlayback, bufferStart);
+        auto overlapEnd = juce::jmin(regionEndInPlayback, bufferEnd);
+        auto overlapLength = overlapEnd - overlapStart;
+        
+        if (overlapLength <= 0)
+            continue;
+        
+        // Calculate offsets
+        auto offsetInBuffer = (int)(overlapStart - bufferStart);
+        auto offsetInRegion = (int)(overlapStart - regionStartInPlayback);
+        
+        // Get audio source
+        auto* audioSource = region->getAudioModification()->getAudioSource();
+        if (!audioSource)
+            continue;
+        
+        // Read audio from source
+        juce::AudioBuffer<float> tempBuffer(buffer.getNumChannels(), (int)overlapLength);
+        
+        // Use ARA's host audio reader to get samples
+        ARA::PlugIn::HostAudioReader reader(audioSource);
+        
+        // Prepare write pointers for reader
+        std::vector<void*> bufferPtrs(static_cast<size_t>(tempBuffer.getNumChannels()));
+        for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
+            bufferPtrs[static_cast<size_t>(ch)] = tempBuffer.getWritePointer(ch);
+        
+        if (reader.readAudioSamples(offsetInRegion, (int)overlapLength, bufferPtrs.data()))
+        {
+            // Add to output buffer
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                if (ch < tempBuffer.getNumChannels())
+                {
+                    buffer.addFrom(ch, offsetInBuffer, tempBuffer, ch, 0, (int)overlapLength);
+                }
+            }
+        }
+    }
+    
+    return true;
 }
 
 //==============================================================================

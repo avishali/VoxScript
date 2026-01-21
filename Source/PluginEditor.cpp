@@ -110,16 +110,15 @@ void VoxScriptAudioProcessorEditor::resized()
 
 void VoxScriptAudioProcessorEditor::transcriptionUpdated (juce::ARAAudioSource* source)
 {
-    // Phase II: Update UI with new transcription
-    // For now, just log
-    DBG ("Editor: Transcription updated for source");
+    DBG ("Editor: Transcription updated notification received");
     juce::ignoreUnused (source);
     
-    // Update the script view with transcription
-    // if (auto* voxSource = dynamic_cast<VoxScriptAudioSource*> (source))
-    // {
-    //     scriptView.setTranscription (voxSource->getTranscription());
-    // }
+    // Update the script view with transcription from document controller
+    if (auto* controller = processorRef.getVoxScriptDocumentController())
+    {
+        scriptView.setTranscription (controller->getTranscription());
+        scriptView.setStatus (controller->getTranscriptionStatus());
+    }
 }
 
 //==============================================================================

@@ -59,6 +59,33 @@ void WhisperEngine::removeListener (Listener* listener)
 //==============================================================================
 // Public API
 
+void WhisperEngine::transcribeAudioSource (juce::ARAAudioSource* audioSource)
+{
+    if (audioSource == nullptr)
+    {
+        notifyFailed ("NULL audio source provided");
+        return;
+    }
+    
+    // Store source for processing
+    currentAudioSource = audioSource;
+    currentAudioFile = juce::File(); // Clear file if source provided
+    
+    // Reset cancel flag
+    shouldCancel = false;
+    
+    // Start background thread if not already running
+    if (!isThreadRunning())
+    {
+        startThread();
+    }
+    else
+    {
+        DBG ("WhisperEngine: Thread already running, queuing not implemented in Phase II");
+        notifyFailed ("Transcription already in progress");
+    }
+}
+
 void WhisperEngine::transcribeAudioFile (const juce::File& audioFile)
 {
     if (!audioFile.existsAsFile())
@@ -69,6 +96,7 @@ void WhisperEngine::transcribeAudioFile (const juce::File& audioFile)
     
     // Store file for processing
     currentAudioFile = audioFile;
+    currentAudioSource = nullptr; // Clear source if file provided
     
     // Reset cancel flag
     shouldCancel = false;
@@ -99,6 +127,23 @@ void WhisperEngine::run()
     DBG ("WhisperEngine: Background thread started");
     DBG ("================================================");
     
+    // Step 1: Extract audio if source is provided
+    if (currentAudioSource != nullptr)
+    {
+        DBG ("WhisperEngine: Extracting audio from source...");
+        notifyProgress (0.0f); // Signal start
+        
+        currentAudioFile = audioExtractor.extractToTempWAV (currentAudioSource);
+        
+        if (!currentAudioFile.existsAsFile())
+        {
+            notifyFailed ("Audio extraction failed");
+            return;
+        }
+        
+        DBG ("WhisperEngine: Audio extracted to: " + currentAudioFile.getFullPathName());
+    }
+
     // Load model if not already loaded
     if (ctx == nullptr)
     {
@@ -107,12 +152,22 @@ void WhisperEngine::run()
         if (ctx == nullptr)
         {
             // Model failed to load, error already reported
+            // Cleanup temp file if we created one
+            if (currentAudioSource != nullptr && currentAudioFile.existsAsFile())
+                currentAudioFile.deleteFile();
             return;
         }
     }
     
     // Process the audio file
     processAudio();
+    
+    // Cleanup temp file if it was created by extraction
+    if (currentAudioSource != nullptr && currentAudioFile.existsAsFile())
+    {
+        DBG ("WhisperEngine: Deleting temp file: " + currentAudioFile.getFullPathName());
+        currentAudioFile.deleteFile();
+    }
     
     DBG ("WhisperEngine: Background thread finished");
 }
@@ -126,10 +181,15 @@ void WhisperEngine::loadModel()
     
     // Phase II: Hardcoded model path
     // Phase III: Make this configurable via settings
-    juce::File modelFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                            .getChildFile ("VoxScript")
-                            .getChildFile ("models")
-                            .getChildFile ("ggml-base.en.bin");
+    juce::File appData = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+    
+#if JUCE_MAC
+    appData = appData.getChildFile ("Application Support");
+#endif
+
+    juce::File modelFile = appData.getChildFile ("VoxScript")
+                                 .getChildFile ("models")
+                                 .getChildFile ("ggml-base.en.bin");
     
     if (!modelFile.existsAsFile())
     {
@@ -218,12 +278,12 @@ void WhisperEngine::processAudio()
     else
     {
         // Mix to mono
-        for (int i = 0; i < numSamples; ++i)
+        for (juce::int64 i = 0; i < numSamples; ++i)
         {
             float sum = 0.0f;
             for (unsigned int ch = 0; ch < numChannels; ++ch)
-                sum += audioBuffer.getSample (static_cast<int> (ch), i);
-            pcmData[i] = sum / static_cast<float> (numChannels);
+                sum += audioBuffer.getSample (static_cast<int> (ch), static_cast<int> (i));
+            pcmData[static_cast<size_t> (i)] = sum / static_cast<float> (numChannels);
         }
     }
     
@@ -306,6 +366,7 @@ void WhisperEngine::processAudio()
         
         VoxSegment segment;
         segment.text = juce::String::fromUTF8 (text);
+        DBG ("WhisperEngine: Segment " + juce::String(i) + " text: " + segment.text);
         segment.startTime = static_cast<double> (t0) / 100.0;  // Convert to seconds
         segment.endTime = static_cast<double> (t1) / 100.0;
         

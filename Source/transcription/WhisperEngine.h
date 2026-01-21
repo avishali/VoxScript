@@ -16,6 +16,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 #include "VoxSequence.h"
+#include "AudioExtractor.h"
 #include <atomic>
 
 // Forward declare whisper_context from whisper.h (global namespace)
@@ -82,6 +83,14 @@ public:
     void removeListener (Listener* listener);
     
     /**
+     * Start transcription of an ARA audio source
+     * This is non-blocking - extraction and transcription happen on background thread
+     * 
+     * @param audioSource The ARA audio source to transcribe
+     */
+    void transcribeAudioSource (juce::ARAAudioSource* audioSource);
+    
+    /**
      * Start transcription of an audio file
      * This is non-blocking - transcription happens on background thread
      * 
@@ -103,7 +112,9 @@ public:
 private:
     //==========================================================================
     juce::ListenerList<Listener> listeners;
+    juce::ARAAudioSource* currentAudioSource = nullptr;
     juce::File currentAudioFile;
+    AudioExtractor audioExtractor;
     std::atomic<bool> shouldCancel {false};
     
     // Opaque pointer to whisper_context (forward declared above)

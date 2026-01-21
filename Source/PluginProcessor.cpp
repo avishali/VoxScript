@@ -69,25 +69,33 @@ bool VoxScriptAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 //==============================================================================
 // Audio Processing
 
-void VoxScriptAudioProcessor::processBlock (juce::AudioBuffer<float>&, 
-                                           juce::MidiBuffer&)
+void VoxScriptAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
+                                           juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
-    
-    // In ARA mode, audio processing happens in VoxScriptPlaybackRenderer
-    // In non-ARA mode, just pass through the audio (do nothing)
-    // Phase II+: Could show "ARA mode required" message in UI
+       juce::ignoreUnused (midiMessages);
+       
+       // In non-ARA mode, audio passes through unchanged
+       if (!isBoundToARA())
+       {
+           // Audio buffer already contains input - just pass it through
+           return;
+       }
+       
+       // In ARA mode, audio processing happens in VoxScriptPlaybackRenderer
 }
 
-void VoxScriptAudioProcessor::processBlock (juce::AudioBuffer<double>&,
-                                           juce::MidiBuffer&)
+void VoxScriptAudioProcessor::processBlock (juce::AudioBuffer<double>& buffer,
+    juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
-    
-    // In ARA mode, audio processing happens in VoxScriptPlaybackRenderer
-    // In non-ARA mode, just pass through the audio (do nothing)
-}
+    juce::ignoreUnused (midiMessages);
 
+    if (!isBoundToARA())
+    {
+        return;
+    }
+}
 //==============================================================================
 // Editor
 

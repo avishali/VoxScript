@@ -39,17 +39,9 @@ juce::File AudioExtractor::extractToTempWAV(juce::ARAAudioSource* araAudioSource
         return juce::File();
     }
     
-    // Step 1: Enable sample access via ARA Document Controller
-    if (auto* docController = araAudioSource->getDocumentController())
-    {
-        // Use ARA::PlugIn::toRef to convert juce::ARAAudioSource* to ARAAudioSourceRef
-        docController->enableAudioSourceSamplesAccess(ARA::PlugIn::toRef(araAudioSource), true);
-    }
-    else
-    {
-        DBG("AudioExtractor: Failed to get Document Controller");
-        return juce::File();
-    }
+    // Step 1: Check if sample access is available
+    // NOTE: Sample access must be enabled on the main thread via DocumentController::enableAudioSourceSamplesAccess
+    // before calling this method from a background thread.
     
     // Step 2: Get audio properties using ARA SDK API (inherited by juce::ARAAudioSource)
     auto sourceSampleRate = araAudioSource->getSampleRate();
@@ -111,7 +103,9 @@ juce::File AudioExtractor::extractToTempWAV(juce::ARAAudioSource* araAudioSource
     juce::AudioBuffer<float> sourceBuffer(sourceChannels, chunkSize);
     juce::AudioBuffer<float> monoBuffer(1, chunkSize);
     
-    const double resampleRatio = targetSampleRate / sourceSampleRate;
+    // speedRatio is inputRate / outputRate (e.g. 48000 / 16000 = 3.0)
+    const double speedRatio = sourceSampleRate / targetSampleRate;
+    const double resampleRatio = 1.0 / speedRatio;
     
     // Use Lagrange interpolator for resampling (good speed/quality balance)
     juce::LagrangeInterpolator interpolator;
@@ -120,7 +114,7 @@ juce::File AudioExtractor::extractToTempWAV(juce::ARAAudioSource* araAudioSource
     ARA::PlugIn::HostAudioReader reader(araAudioSource);
     
     juce::int64 sourcePosition = 0;
-    int samplesWritten = 0;
+    juce::int64 samplesWritten = 0;
     
     while (sourcePosition < totalSamples)
     {
@@ -143,26 +137,27 @@ juce::File AudioExtractor::extractToTempWAV(juce::ARAAudioSource* araAudioSource
         }
         
         // Step 6: Resample to 16kHz using Lagrange interpolation
-        const int outputChunkSize = static_cast<int>(samplesToRead * resampleRatio) + 2;
-        juce::AudioBuffer<float> resampledBuffer(1, outputChunkSize);
+        // Calculate exactly how many output samples to produce for this input chunk
+        const int numOutputSamples = static_cast<int>(static_cast<double>(samplesToRead) * resampleRatio);
+        juce::AudioBuffer<float> resampledBuffer(1, numOutputSamples + 10); // buffer with a bit of padding
         resampledBuffer.clear();
         
-        int numSamplesResampled = interpolator.process(
-            resampleRatio,
+        interpolator.process(
+            speedRatio,
             monoBuffer.getReadPointer(0),
             resampledBuffer.getWritePointer(0),
-            samplesToRead);
+            numOutputSamples);
         
         // Step 7: Write resampled samples to WAV file
-        if (numSamplesResampled > 0)
+        if (numOutputSamples > 0)
         {
-            if (!writer->writeFromAudioSampleBuffer(resampledBuffer, 0, numSamplesResampled))
+            if (!writer->writeFromAudioSampleBuffer(resampledBuffer, 0, numOutputSamples))
             {
                 DBG("AudioExtractor: Failed to write samples");
                 tempFile.deleteFile();
                 return juce::File();
             }
-            samplesWritten += numSamplesResampled;
+            samplesWritten += numOutputSamples;
         }
         
         sourcePosition += samplesToRead;

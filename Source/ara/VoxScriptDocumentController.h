@@ -153,17 +153,13 @@ public:
     juce::String getTranscriptionStatus() const { return transcriptionStatus; }
 
     private:
-    void cleanupTempFile();
-    
     //==========================================================================
     juce::ListenerList<Listener> listeners;
     
     // Phase II/III: Transcription and Audio Extraction
     WhisperEngine whisperEngine;
-    AudioExtractor audioExtractor;
     VoxSequence currentTranscription;
     juce::String transcriptionStatus = "Idle";
-    juce::File currentTempFile;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptDocumentController)
 };

@@ -44,25 +44,12 @@ juce::ARAAudioSource* VoxScriptDocumentController::doCreateAudioSource (
 
 void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument* document, juce::ARAAudioSource* audioSource)
 {
-    juce::ignoreUnused (document);
+    juce::ignoreUnused (document, audioSource);
     DBG ("VoxScriptDocumentController::didAddAudioSourceToDocument called");
     
-    // Extract audio to temporary WAV file for transcription
-    transcriptionStatus = "Extracting audio...";
-    currentTempFile = audioExtractor.extractToTempWAV (audioSource);
-    
-    if (!currentTempFile.existsAsFile())
-    {
-        transcriptionStatus = "Failed: Could not extract audio";
-        DBG ("AudioExtractor failed to create temp file");
-        return;
-    }
-    
-    DBG ("Audio extracted to: " + currentTempFile.getFullPathName());
-    
-    // Trigger transcription
-    transcriptionStatus = "Starting transcription...";
-    whisperEngine.transcribeAudioFile (currentTempFile);
+    // NOTE: Don't extract audio here - source not fully initialized yet!
+    // Audio source may not have sample access enabled at this point.
+    // Extraction will happen in doCreateAudioModification() instead.
 }
 
 void VoxScriptDocumentController::doDestroyAudioSource (
@@ -80,9 +67,18 @@ juce::ARAAudioModification* VoxScriptDocumentController::doCreateAudioModificati
     ARA::ARAAudioModificationHostRef hostRef,
     const juce::ARAAudioModification* optionalModificationToClone) noexcept
 {
-    DBG ("VoxScriptDocumentController::doCreateAudioModification called");
+    DBG ("VOXSCRIPT: Creating Audio Modification for source: " + juce::String (audioSource->getName()));
     
-    // In Phase III Task 2, we'll create a custom modification that stores VoxEditList
+    // Enable sample access on the main thread (required by ARA SDK)
+    if (auto* docController = audioSource->getDocumentController())
+    {
+        docController->enableAudioSourceSamplesAccess (ARA::PlugIn::toRef (audioSource), true);
+    }
+    
+    // Trigger asynchronous transcription (extraction + inference)
+    transcriptionStatus = "Starting analysis...";
+    whisperEngine.transcribeAudioSource (audioSource);
+    
     return new juce::ARAAudioModification (audioSource, hostRef, optionalModificationToClone);
 }
 
@@ -186,25 +182,16 @@ void VoxScriptDocumentController::transcriptionComplete (VoxSequence sequence)
 {
     currentTranscription = sequence;
     transcriptionStatus = "Ready";
-    cleanupTempFile();
     DBG ("Transcription complete: " + juce::String (sequence.getWordCount()) + " words");
+    
+    // Notify listeners (like the UI Editor)
+    notifyTranscriptionUpdated (nullptr);
 }
 
 void VoxScriptDocumentController::transcriptionFailed (const juce::String& error)
 {
     transcriptionStatus = "Failed: " + error;
     DBG ("Transcription error: " + error);
-    cleanupTempFile();
-}
-
-void VoxScriptDocumentController::cleanupTempFile()
-{
-    if (currentTempFile.existsAsFile())
-    {
-        DBG("Deleting temp file: " + currentTempFile.getFullPathName());
-        currentTempFile.deleteFile();
-        currentTempFile = juce::File();
-    }
 }
 
 } // namespace VoxScript

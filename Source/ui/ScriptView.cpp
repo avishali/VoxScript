@@ -82,6 +82,7 @@ void ScriptView::resized()
 void ScriptView::setTranscription (const VoxSequence& sequence)
 {
     displayText = sequence.getFullText();
+    DBG ("ScriptView: Received transcription text: " + displayText);
     repaint();
 }
 
@@ -119,7 +120,9 @@ void ScriptView::timerCallback()
     
     // Check if transcription updated
     auto& transcription = documentController->getTranscription();
-    if (!transcription.getSegments().isEmpty() && displayText.isEmpty())
+    auto newText = transcription.getFullText();
+    
+    if (newStatus == "Ready" && !newText.isEmpty() && newText != displayText)
     {
         setTranscription(transcription);
     }
