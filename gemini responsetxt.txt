@@ -1,0 +1,25 @@
+Project Context: VoxScript (JUCE 8 ARA Plugin) - Phase III
+Current Task: Implementing the AudioExtractor class. Goal: Extract audio from an ARA Source (DAW timeline) and save it to a temporary WAV file for Whisper transcription. Requirements:
+
+Format: Output must be 16kHz, Mono, 16-bit PCM (Whisper requirement).
+
+Thread Safety: Must be safe for Steinberg hosts (Cubase/Nuendo), which requires instantiating ARAAudioSourceReader locally on the worker thread.
+
+Performance: Downmix to Mono before resampling to save CPU.
+
+Architecture Rationale & Logic
+Why make_unique<ARAAudioSourceReader> inside the function?
+
+This ensures the reader exists in the local scope of the worker thread. Steinberg hosts use Thread Local Storage for ARA access. If we created the reader on the Message Thread and passed it to the worker, read() calls would fail or glitch.
+
+Why Downmix before Resampling?
+
+Whisper only requires Mono.
+
+Resampling is mathematically expensive (CPU intensive).
+
+By downmixing first, we only run the LagrangeInterpolator on 1 channel instead of 2 (or more). This is a linear optimization that saves roughly 50% CPU during extraction.
+
+Handling "Sample Access Disabled":
+
+If !araSource->isSampleAccessEnabled(), we return an empty juce::File(). The calling controller is responsible for checking file.existsAsFile() before proceeding. This prevents crashes if the user is currently recording or if the DAW hasn't finalized the file.

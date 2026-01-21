@@ -1,0 +1,864 @@
+================================================================================
+MISSION: PHASE_II_WHISPER_INTEGRATION_001
+================================================================================
+
+CREATED: 2025-01-21
+AUTHOR: Avishay Lidani (MelechDSP)
+PROJECT: VoxScript
+PHASE: II - Transcription Engine
+
+================================================================================
+MULTI-AGENT MODE: ENABLED
+================================================================================
+
+This mission MUST be executed using the MULTI_AGENT_EXECUTION_V1 runbook.
+
+EXECUTION SEQUENCE:
+1. IMPLEMENTER makes code changes, writes IMPLEMENTER_RESULT.md, STOPS
+2. VERIFIER audits changes, runs build, writes VERIFIER_RESULT.md + LAST_RESULT.md, STOPS
+3. ARCHITECT reviews LAST_RESULT.md and approves/rejects
+
+NO DEVIATION FROM THIS SEQUENCE IS PERMITTED.
+
+================================================================================
+OBJECTIVE
+================================================================================
+
+Integrate whisper.cpp library into VoxScript to enable background audio 
+transcription with the following deliverables:
+
+1. whisper.cpp dependency integrated into CMake build system
+2. WhisperEngine class for background transcription processing
+3. VoxSequence data structure to hold transcription results
+4. Integration with ARA DocumentController to trigger transcription
+5. ScriptView updated to display transcription text (read-only for now)
+6. Basic progress/status indicators in UI
+
+WHAT THIS MISSION IS NOT:
+- NOT implementing text editing (Phase III)
+- NOT implementing audio alignment or time-stretching (Phase III)
+- NOT implementing UI polish or waveform visualization (Phase IV)
+- NOT implementing model selection UI (deferred)
+
+================================================================================
+SCOPE - FILES THAT MAY BE MODIFIED
+================================================================================
+
+BUILD SYSTEM (2 files):
+  ✓ CMakeLists.txt
+    - Add whisper.cpp as external dependency
+    - Link whisper library to plugin targets
+  
+  ✓ CMake/FetchWhisper.cmake (NEW)
+    - FetchContent configuration for whisper.cpp
+    - Optional: local path override for development
+
+TRANSCRIPTION ENGINE (4 files - NEW):
+  ✓ Source/transcription/WhisperEngine.h
+    - Class declaration for transcription processing
+    - Callback interface for progress/completion
+    
+  ✓ Source/transcription/WhisperEngine.cpp
+    - Implementation of transcription logic
+    - Background thread management
+    - whisper.cpp API integration
+  
+  ✓ Source/transcription/VoxSequence.h
+    - Data structure for transcription results
+    - Word-level timing information
+    - Text segments with confidence scores
+  
+  ✓ Source/transcription/VoxSequence.cpp
+    - Implementation of VoxSequence methods
+    - Serialization (optional for Phase II)
+
+ARA INTEGRATION (2 files):
+  ✓ Source/ara/VoxScriptDocumentController.h
+    - Add WhisperEngine member
+    - Add VoxSequence storage
+    - Declare transcription trigger methods
+  
+  ✓ Source/ara/VoxScriptDocumentController.cpp
+    - Instantiate WhisperEngine
+    - Trigger transcription when audio source added
+    - Store VoxSequence results
+    - Notify UI of transcription completion
+
+UI LAYER (2 files):
+  ✓ Source/ui/ScriptView.h
+    - Add method to display VoxSequence data
+    - Add progress indicator member (simple text)
+  
+  ✓ Source/ui/ScriptView.cpp
+    - Implement transcription text rendering
+    - Display "Transcribing..." status
+    - Display "Ready" when complete
+
+DOCUMENTATION (1 file):
+  ✓ CHANGELOG.md
+    - Document Phase II completion
+
+TOTAL: 11 files (7 new, 4 modified)
+
+================================================================================
+SCOPE - FILES THAT MUST NOT BE MODIFIED
+================================================================================
+
+FORBIDDEN - DO NOT TOUCH:
+  ✗ Source/PluginProcessor.h/cpp (ARA factory must remain stable)
+  ✗ Source/PluginEditor.h/cpp (dual-view layout is final for Phase II)
+  ✗ Source/ara/VoxScriptAudioSource.h/cpp (no changes needed)
+  ✗ Source/ara/VoxScriptPlaybackRenderer.h/cpp (Phase III feature)
+  ✗ Source/ui/DetailView.h/cpp (waveform is Phase IV)
+  ✗ build.sh (build script works, do not modify)
+  ✗ Any build output directories
+  ✗ Any JUCE source files
+
+IF YOU THINK YOU NEED TO MODIFY A FORBIDDEN FILE:
+→ STOP IMMEDIATELY
+→ Write explanation in result file
+→ Mission will be rejected, new mission will be created
+
+================================================================================
+WHISPER.CPP INTEGRATION REQUIREMENTS
+================================================================================
+
+LIBRARY INTEGRATION:
+- Use whisper.cpp via FetchContent or ExternalProject_Add in CMake
+- Target commit/tag: Use latest stable release (or specific SHA if needed)
+- Repository: https://github.com/ggerganov/whisper.cpp
+- Build whisper as static library
+- Link to: VoxScript_SharedCode target (so all plugin formats have access)
+
+MODEL REQUIREMENTS:
+- Default model: ggml-base.en.bin (English-only, ~140MB)
+- Model location: Hardcoded path for Phase II (e.g., ~/Library/Application Support/VoxScript/models/)
+- Model auto-download: DEFER to Phase IV (manual installation for now)
+- User must manually place model file before using plugin
+
+THREADING MODEL:
+- Transcription MUST run on background thread (NOT message thread, NOT audio thread)
+- Use juce::Thread or std::thread
+- No blocking of UI or audio processing
+- Cancellation support (optional for Phase II, but architecture should allow it)
+
+RT-SAFETY:
+- WhisperEngine must NEVER allocate on audio thread
+- All transcription work happens in background thread
+- Communication with audio thread via lock-free queue if needed (Phase III)
+
+================================================================================
+WHISPERENGINE SPECIFICATION
+================================================================================
+
+CLASS INTERFACE (WhisperEngine.h):
+
+```cpp
+#pragma once
+#include <JuceHeader.h>
+#include "VoxSequence.h"
+
+class WhisperEngine : public juce::Thread
+{
+public:
+    WhisperEngine();
+    ~WhisperEngine() override;
+    
+    // Listener interface for callbacks
+    class Listener
+    {
+    public:
+        virtual ~Listener() = default;
+        virtual void transcriptionProgress (float progress) = 0;
+        virtual void transcriptionComplete (VoxSequence sequence) = 0;
+        virtual void transcriptionFailed (const juce::String& error) = 0;
+    };
+    
+    void addListener (Listener* listener);
+    void removeListener (Listener* listener);
+    
+    // Start transcription of audio file
+    void transcribeAudioFile (const juce::File& audioFile);
+    
+    // Cancel ongoing transcription
+    void cancelTranscription();
+    
+    // Thread implementation
+    void run() override;
+    
+private:
+    juce::ListenerList<Listener> listeners;
+    juce::File currentAudioFile;
+    std::atomic<bool> shouldCancel {false};
+    
+    // whisper.cpp context (opaque pointer)
+    struct whisper_context* ctx = nullptr;
+    
+    void loadModel();
+    void processAudio();
+    void notifyProgress (float progress);
+    void notifyComplete (VoxSequence sequence);
+    void notifyFailed (const juce::String& error);
+    
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WhisperEngine)
+};
+```
+
+IMPLEMENTATION REQUIREMENTS (WhisperEngine.cpp):
+- Constructor: Initialize thread, load whisper model
+- Destructor: Stop thread gracefully, free whisper context
+- transcribeAudioFile(): Queue file for processing, start thread if not running
+- run(): Main thread loop - read audio, call whisper API, build VoxSequence
+- loadModel(): Load ggml-base.en.bin from known path
+- Error handling: If model missing, call notifyFailed() with clear message
+
+WHISPER API USAGE:
+- Use whisper_init_from_file() to load model
+- Use whisper_full() to perform transcription
+- Extract word-level timestamps using whisper_full_get_segment_*() functions
+- Convert whisper output to VoxSequence format
+
+================================================================================
+VOXSEQUENCE SPECIFICATION
+================================================================================
+
+DATA STRUCTURE (VoxSequence.h):
+
+```cpp
+#pragma once
+#include <JuceHeader.h>
+
+struct VoxWord
+{
+    juce::String text;
+    double startTime;   // seconds
+    double endTime;     // seconds
+    float confidence;   // 0.0 to 1.0
+};
+
+struct VoxSegment
+{
+    juce::String text;
+    double startTime;
+    double endTime;
+    juce::Array<VoxWord> words;
+};
+
+class VoxSequence
+{
+public:
+    VoxSequence() = default;
+    
+    void addSegment (const VoxSegment& segment);
+    void clear();
+    
+    const juce::Array<VoxSegment>& getSegments() const;
+    juce::String getFullText() const;
+    
+    int getWordCount() const;
+    double getTotalDuration() const;
+    
+private:
+    juce::Array<VoxSegment> segments;
+    
+    JUCE_LEAK_DETECTOR (VoxSequence)
+};
+```
+
+IMPLEMENTATION NOTES:
+- VoxSequence is value-type (copyable)
+- Segments and words are stored in chronological order
+- getFullText() concatenates all segment text with spaces
+- Thread-safe: VoxSequence objects passed by value to UI
+
+================================================================================
+ARA DOCUMENTCONTROLLER INTEGRATION
+================================================================================
+
+MODIFICATIONS TO VoxScriptDocumentController.h:
+
+```cpp
+#include "transcription/WhisperEngine.h"
+#include "transcription/VoxSequence.h"
+
+class VoxScriptDocumentController : public juce::ARADocumentControllerSpecialisation,
+                                     private WhisperEngine::Listener
+{
+public:
+    // ... existing methods ...
+    
+    const VoxSequence& getTranscription() const { return currentTranscription; }
+    juce::String getTranscriptionStatus() const { return transcriptionStatus; }
+    
+private:
+    // WhisperEngine::Listener overrides
+    void transcriptionProgress (float progress) override;
+    void transcriptionComplete (VoxSequence sequence) override;
+    void transcriptionFailed (const juce::String& error) override;
+    
+    WhisperEngine whisperEngine;
+    VoxSequence currentTranscription;
+    juce::String transcriptionStatus = "Idle";
+    
+    // ... existing members ...
+};
+```
+
+MODIFICATIONS TO VoxScriptDocumentController.cpp:
+
+```cpp
+VoxScriptDocumentController::VoxScriptDocumentController (...)
+    : /* ... existing initialization ... */
+{
+    whisperEngine.addListener (this);
+}
+
+VoxScriptDocumentController::~VoxScriptDocumentController()
+{
+    whisperEngine.removeListener (this);
+}
+
+void VoxScriptDocumentController::didAddAudioSource (...)
+{
+    // ... existing code ...
+    
+    // Trigger transcription when audio source added
+    if (auto* audioSource = getAudioSources().getLast())
+    {
+        auto audioFile = /* extract file path from audioSource */;
+        transcriptionStatus = "Starting transcription...";
+        whisperEngine.transcribeAudioFile (audioFile);
+    }
+}
+
+void VoxScriptDocumentController::transcriptionProgress (float progress)
+{
+    transcriptionStatus = juce::String ("Transcribing: ") + 
+                          juce::String (int (progress * 100)) + "%";
+    // TODO Phase III: Notify UI to repaint
+}
+
+void VoxScriptDocumentController::transcriptionComplete (VoxSequence sequence)
+{
+    currentTranscription = sequence;
+    transcriptionStatus = "Ready";
+    // TODO Phase III: Notify UI to display new transcription
+}
+
+void VoxScriptDocumentController::transcriptionFailed (const juce::String& error)
+{
+    transcriptionStatus = "Failed: " + error;
+    DBG ("Transcription error: " + error);
+}
+```
+
+================================================================================
+SCRIPTVIEW UI UPDATES
+================================================================================
+
+MODIFICATIONS TO ScriptView.h:
+
+```cpp
+class ScriptView : public juce::Component
+{
+public:
+    void setTranscription (const VoxSequence& sequence);
+    void setStatus (const juce::String& status);
+    
+private:
+    juce::String displayText;
+    juce::String statusText;
+    
+    // ... existing members ...
+};
+```
+
+MODIFICATIONS TO ScriptView.cpp:
+
+```cpp
+void ScriptView::setTranscription (const VoxSequence& sequence)
+{
+    displayText = sequence.getFullText();
+    repaint();
+}
+
+void ScriptView::setStatus (const juce::String& status)
+{
+    statusText = status;
+    repaint();
+}
+
+void ScriptView::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::white);
+    
+    // Draw status in top-left
+    g.setColour (juce::Colours::grey);
+    g.setFont (12.0f);
+    g.drawText (statusText, 10, 10, 200, 20, juce::Justification::left);
+    
+    // Draw transcription text
+    if (displayText.isNotEmpty())
+    {
+        g.setColour (juce::Colours::black);
+        g.setFont (14.0f);
+        auto textArea = getLocalBounds().reduced (20).withTrimmedTop (40);
+        g.drawMultiLineText (displayText, textArea.getX(), textArea.getY(), 
+                             textArea.getWidth());
+    }
+    else
+    {
+        g.setColour (juce::Colours::grey);
+        g.drawText ("No transcription available", 
+                    getLocalBounds(), juce::Justification::centred);
+    }
+}
+```
+
+NOTE: This is basic text rendering. Phase IV will add proper text editor component.
+
+================================================================================
+ACCEPTANCE CRITERIA
+================================================================================
+
+The mission is considered SUCCESSFUL if ALL of the following are true:
+
+BUILD SYSTEM:
+  [AC-1] CMakeLists.txt successfully fetches and links whisper.cpp library
+  [AC-2] Build completes without errors: `cd build-Debug && ninja`
+  [AC-3] No new compiler warnings introduced (allow existing JUCE warnings)
+  [AC-4] VST3 and Standalone formats build successfully
+
+CODE STRUCTURE:
+  [AC-5] Source/transcription/ directory exists with 4 files (2 .h, 2 .cpp)
+  [AC-6] WhisperEngine.h/cpp compiles without errors
+  [AC-7] VoxSequence.h/cpp compiles without errors
+  [AC-8] All new classes follow JUCE naming conventions (PascalCase)
+  [AC-9] All new files have MelechDSP copyright header
+
+ARA INTEGRATION:
+  [AC-10] VoxScriptDocumentController.h includes WhisperEngine and VoxSequence
+  [AC-11] DocumentController implements WhisperEngine::Listener interface
+  [AC-12] didAddAudioSource() triggers transcription call
+  [AC-13] No memory leaks (WhisperEngine destructor cleans up properly)
+
+THREAD SAFETY:
+  [AC-14] WhisperEngine runs on background thread (juce::Thread)
+  [AC-15] No heap allocations on audio thread (existing RT-safety preserved)
+  [AC-16] Listener callbacks are thread-safe (use MessageManager if needed)
+
+UI INTEGRATION:
+  [AC-17] ScriptView.h has setTranscription() and setStatus() methods
+  [AC-18] ScriptView displays "Transcribing..." status during processing
+  [AC-19] ScriptView displays transcription text when complete
+  [AC-20] UI does not freeze during transcription
+
+RUNTIME BEHAVIOR (manual verification in VERIFIER step):
+  [AC-21] Plugin loads in Reaper without crashing
+  [AC-22] When audio file added, "Transcribing..." appears in ScriptView
+  [AC-23] After transcription, text appears in ScriptView
+  [AC-24] If model missing, error message appears (not crash)
+  [AC-25] Multiple audio files can be transcribed sequentially
+
+SCOPE COMPLIANCE:
+  [AC-26] ZERO changes to forbidden files (PluginProcessor, PluginEditor, etc.)
+  [AC-27] ONLY files in scope list were modified
+  [AC-28] No speculative features added beyond mission scope
+
+DOCUMENTATION:
+  [AC-29] CHANGELOG.md updated with Phase II completion notes
+  [AC-30] No TODO comments left in code (use FIXME if issue found)
+
+TOTAL: 30 acceptance criteria
+
+ALL must PASS for mission success.
+ANY failure = mission REJECTED, new mission created.
+
+================================================================================
+FORBIDDEN ACTIONS
+================================================================================
+
+DO NOT:
+  ✗ Add UI controls for model selection (Phase IV)
+  ✗ Implement text editing functionality (Phase III)
+  ✗ Add waveform visualization (Phase IV)
+  ✗ Implement audio alignment or time-stretching (Phase III)
+  ✗ Add parameter automation (out of scope)
+  ✗ Modify ARA playback renderer (Phase III)
+  ✗ Add undo/redo system (Phase III)
+  ✗ Implement file export (Phase IV)
+  ✗ Add keyboard shortcuts (Phase IV)
+  ✗ Create preferences/settings UI (Phase IV)
+  ✗ Refactor existing ARA code beyond what's needed for integration
+  ✗ Change plugin name, manufacturer code, or version number
+  ✗ Add third-party dependencies beyond whisper.cpp
+
+IF YOU ARE TEMPTED TO DO ANY OF THE ABOVE:
+→ Stop and document in result file
+→ Mission scope is fixed, no negotiation
+
+================================================================================
+BUILD VERIFICATION COMMAND
+================================================================================
+
+VERIFIER must run the following command and include output in VERIFIER_RESULT.md:
+
+```bash
+cd /Users/avishaylidani/DEV/GitHubRepo/VoxScript/build-Debug
+ninja -v 2>&1 | tee build.log
+```
+
+Expected output: "[100%] Built target VoxScript_VST3" with no errors.
+
+If build fails:
+- Include first 50 lines of error output in VERIFIER_RESULT.md
+- Mark all affected acceptance criteria as FAIL
+- Mission is REJECTED
+
+================================================================================
+RUNTIME VERIFICATION STEPS
+================================================================================
+
+VERIFIER must perform these manual tests:
+
+1. LOAD TEST:
+   - Open Reaper
+   - Create audio track
+   - Add VoxScript as ARA extension
+   - Record in result: Does plugin load? (PASS/FAIL)
+
+2. MODEL CHECK:
+   - Verify model exists: ~/Library/Application Support/VoxScript/models/ggml-base.en.bin
+   - If missing, create directory and document in result
+   - Record: Model accessible? (PASS/FAIL)
+
+3. TRANSCRIPTION TEST:
+   - Import audio file into Reaper
+   - Assign to VoxScript
+   - Observe ScriptView
+   - Record: Shows "Transcribing..." status? (PASS/FAIL)
+   - Wait for completion
+   - Record: Shows transcription text? (PASS/FAIL)
+
+4. ERROR TEST:
+   - Temporarily rename model file
+   - Repeat transcription test
+   - Record: Shows error message instead of crashing? (PASS/FAIL)
+   - Restore model file
+
+5. MULTI-FILE TEST:
+   - Add second audio file
+   - Record: Second transcription works? (PASS/FAIL)
+
+Document results in VERIFIER_RESULT.md under "Runtime Verification" section.
+
+================================================================================
+IMPLEMENTER INSTRUCTIONS
+================================================================================
+
+IMPLEMENTER ROLE - READ CAREFULLY:
+
+You are the IMPLEMENTER. Your job is to:
+1. Create/modify ONLY the files in the SCOPE section
+2. Follow specifications EXACTLY as written above
+3. Write IMPLEMENTER_RESULT.md when done
+4. STOP - do not run builds, do not verify, do not continue
+
+PROCESS:
+1. Create Source/transcription/ directory
+2. Implement WhisperEngine.h/cpp per specification
+3. Implement VoxSequence.h/cpp per specification
+4. Modify VoxScriptDocumentController.h/cpp per specification
+5. Modify ScriptView.h/cpp per specification
+6. Create CMake/FetchWhisper.cmake for whisper.cpp dependency
+7. Modify CMakeLists.txt to integrate whisper.cpp
+8. Update CHANGELOG.md
+9. Write IMPLEMENTER_RESULT.md (see template below)
+10. STOP
+
+DO NOT:
+- Run build
+- Test in DAW
+- Verify acceptance criteria
+- Fix issues found during implementation (document instead)
+- Continue after writing result file
+
+IMPLEMENTER_RESULT.md TEMPLATE:
+
+```markdown
+# IMPLEMENTER RESULT - PHASE_II_WHISPER_INTEGRATION_001
+
+## Agent Info
+- Role: IMPLEMENTER
+- Model: [Your model name]
+- Execution time: [Start time] to [End time]
+
+## Summary
+[2-3 sentence summary of what was implemented]
+
+## Files Modified
+- [List each file with brief description of changes]
+
+## Files Created
+- [List each new file with brief description]
+
+## Issues Encountered
+[List any problems, ambiguities, or concerns discovered during implementation]
+[If none, write "None"]
+
+## Deviations from Spec
+[List any intentional deviations from CURRENT_MISSION.txt]
+[If none, write "None"]
+
+## Implementation Notes
+[Any important details about the implementation approach]
+
+## STOP Confirmation
+I have completed code changes and am now STOPPING.
+I did NOT run build or verification.
+Passing to VERIFIER role.
+```
+
+================================================================================
+VERIFIER INSTRUCTIONS
+================================================================================
+
+VERIFIER ROLE - READ CAREFULLY:
+
+You are the VERIFIER. Your job is to:
+1. Read CURRENT_MISSION.txt (this file)
+2. Read IMPLEMENTER_RESULT.md
+3. Audit file changes against scope
+4. Run build command
+5. Perform runtime verification steps
+6. Evaluate ALL 30 acceptance criteria
+7. Write VERIFIER_RESULT.md
+8. Write merged LAST_RESULT.md
+9. STOP - do not modify code, do not fix issues
+
+PROCESS:
+1. Check IMPLEMENTER_RESULT.md exists and is complete
+2. List all files modified by IMPLEMENTER
+3. Verify no forbidden files were touched
+4. Run build: `cd build-Debug && ninja -v`
+5. Document build result (SUCCESS/FAILURE)
+6. If build SUCCESS, perform runtime verification steps
+7. Evaluate each acceptance criterion: PASS/FAIL/SKIP
+8. Write VERIFIER_RESULT.md (see template below)
+9. Merge IMPLEMENTER + VERIFIER results into LAST_RESULT.md
+10. STOP
+
+DO NOT:
+- Modify code to fix issues
+- Suggest fixes in verification result
+- Continue after writing results
+- Make "small tweaks" to pass criteria
+
+VERIFIER_RESULT.md TEMPLATE:
+
+```markdown
+# VERIFIER RESULT - PHASE_II_WHISPER_INTEGRATION_001
+
+## Agent Info
+- Role: VERIFIER
+- Model: [Your model name]
+- Execution time: [Start time] to [End time]
+
+## Scope Audit
+Files modified (should match SCOPE):
+- [List each file]
+
+Files NOT in scope but modified (should be empty):
+- [List any violations, or write "None"]
+
+Forbidden files touched (should be empty):
+- [List any violations, or write "None"]
+
+Scope compliance: [PASS/FAIL]
+
+## Build Result
+Command: cd build-Debug && ninja -v
+Result: [SUCCESS/FAILURE]
+
+Build output (first/last 20 lines):
+```
+[Paste output]
+```
+
+Build compliance: [PASS/FAIL]
+
+## Acceptance Criteria Evaluation
+
+[AC-1] CMakeLists.txt successfully fetches whisper.cpp: [PASS/FAIL/SKIP]
+[AC-2] Build completes without errors: [PASS/FAIL/SKIP]
+...
+[AC-30] No TODO comments in code: [PASS/FAIL/SKIP]
+
+Summary: X/30 PASS, Y/30 FAIL, Z/30 SKIP
+
+## Runtime Verification
+[Document results of 5 manual tests]
+
+## Issues Found
+[List any issues discovered during verification]
+[If none, write "None"]
+
+## STOP Confirmation
+I have completed verification and am now STOPPING.
+I did NOT modify any code.
+Results written to LAST_RESULT.md.
+```
+
+LAST_RESULT.md TEMPLATE:
+
+```markdown
+# MISSION RESULT - PHASE_II_WHISPER_INTEGRATION_001
+
+## Mission Status
+[SUCCESS/FAILURE]
+
+## Summary
+[Combined 2-3 sentence summary from both agents]
+
+## Agent Execution
+- IMPLEMENTER: [model name], [execution time]
+- VERIFIER: [model name], [execution time]
+
+## Implementation Summary
+[From IMPLEMENTER_RESULT.md]
+
+## Verification Summary
+- Scope compliance: [PASS/FAIL]
+- Build result: [SUCCESS/FAILURE]
+- Acceptance criteria: X/30 PASS, Y/30 FAIL, Z/30 SKIP
+- Runtime verification: [summary]
+
+## Issues
+[Merged list from both agents]
+
+## Outcome
+[If SUCCESS: "Mission APPROVED - ready for Phase III"]
+[If FAILURE: "Mission REJECTED - create new mission to address failures"]
+
+## STOP Confirmations
+- IMPLEMENTER: Stopped after code changes ✓
+- VERIFIER: Stopped after verification ✓
+```
+
+================================================================================
+STOP RULE
+================================================================================
+
+IMPLEMENTER must STOP after writing IMPLEMENTER_RESULT.md.
+VERIFIER must STOP after writing VERIFIER_RESULT.md and LAST_RESULT.md.
+
+NO EXCEPTIONS.
+NO "JUST ONE MORE THING".
+NO FIXES AFTER STOPPING.
+
+If issues found: Document and STOP. ARCHITECT will decide next steps.
+
+================================================================================
+WHISPER.CPP CMAKE EXAMPLE
+================================================================================
+
+For reference, here's a sample CMake/FetchWhisper.cmake:
+
+```cmake
+include(FetchContent)
+
+FetchContent_Declare(
+    whisper
+    GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
+    GIT_TAG        v1.5.4  # Use specific stable version
+    SOURCE_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp
+)
+
+# Configure whisper.cpp build
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(whisper)
+
+# Export targets
+add_library(whisper::whisper ALIAS whisper)
+```
+
+Then in main CMakeLists.txt:
+
+```cmake
+# After juce_add_plugin(...)
+include(CMake/FetchWhisper.cmake)
+
+target_link_libraries(VoxScript_SharedCode
+    PRIVATE
+        whisper::whisper
+        # ... existing libraries ...
+)
+
+target_include_directories(VoxScript_SharedCode
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp
+)
+```
+
+Adjust as needed for actual whisper.cpp build system.
+
+================================================================================
+MODEL INSTALLATION GUIDE (for manual testing)
+================================================================================
+
+VERIFIER must ensure model is available before runtime tests:
+
+```bash
+mkdir -p ~/Library/Application\ Support/VoxScript/models
+cd ~/Library/Application\ Support/VoxScript/models
+
+# Download base English model (~140MB)
+curl -L -o ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+# Verify download
+ls -lh ggml-base.en.bin
+```
+
+If model missing during test, document in VERIFIER_RESULT.md and test error handling.
+
+================================================================================
+SUCCESS CRITERIA SUMMARY
+================================================================================
+
+Mission succeeds if:
+✓ All 30 acceptance criteria PASS
+✓ Build completes successfully
+✓ Scope compliance: No forbidden files modified
+✓ Runtime tests: Plugin loads and transcribes audio
+✓ Both agents STOPPED as required
+
+Mission fails if:
+✗ Any acceptance criterion FAILS
+✗ Build errors
+✗ Scope violations
+✗ Runtime crashes
+✗ Agents did not STOP
+
+================================================================================
+END OF MISSION SPECIFICATION
+================================================================================
+
+This mission file is the SINGLE SOURCE OF TRUTH for Phase II.
+
+All implementation decisions must reference this document.
+All verification steps must follow this document.
+All scope questions are answered by this document.
+
+If this document is ambiguous or incomplete:
+→ STOP
+→ Document the ambiguity in result file
+→ ARCHITECT will clarify and create new mission
+
+DO NOT PROCEED if anything is unclear.
+DO NOT GUESS at specifications.
+DO NOT ADD features beyond this scope.
+
+Good luck, agents. Execute with precision. 🎯

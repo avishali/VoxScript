@@ -1,0 +1,175 @@
+Source/transcription/AudioExtractor.cpp
+
+/*
+  ==============================================================================
+
+    AudioExtractor.cpp
+    
+    Implementation Notes:
+    - Uses juce::ARAAudioSourceReader as the SINGLE source of truth.
+    - Downmixes to Mono first, then Resamples to 16kHz.
+    - Uses Lagrange interpolation for speed/quality balance on speech.
+
+  ==============================================================================
+*/
+
+#include "AudioExtractor.h"
+
+namespace VoxScript
+{
+
+juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource, 
+                                             const juce::String& tempFilePrefix)
+{
+    // 1. Validate Input
+    //    We must ensure sample access is enabled before attempting to read.
+    if (araSource == nullptr || !araSource->isSampleAccessEnabled())
+    {
+        DBG("AudioExtractor: Source is null or access not granted.");
+        return juce::File();
+    }
+
+    // 2. Create Reader (THREAD SAFETY CRITICAL)
+    //    We instantiate the reader HERE (Local Scope) to satisfy Steinberg/Nuendo 
+    //    threading requirements. Passing a reader across threads causes glitches.
+    auto reader = std::make_unique<juce::ARAAudioSourceReader>(araSource);
+
+    if (reader == nullptr || reader->lengthInSamples == 0)
+    {
+        DBG("AudioExtractor: Failed to create reader or source is empty.");
+        return juce::File();
+    }
+
+    const double sourceRate = reader->sampleRate;
+    const double targetRate = 16000.0;
+    const int numSourceChannels = (int)reader->numChannels;
+    const int64 totalSourceSamples = reader->lengthInSamples;
+
+    // 3. Prepare Temp File
+    juce::File tempFile = getUniqueTempFile(tempFilePrefix);
+    
+    // Create File Output Stream
+    std::unique_ptr<juce::FileOutputStream> fileStream(tempFile.createOutputStream());
+    if (!fileStream || !fileStream->openedOk())
+    {
+        DBG("AudioExtractor: Failed to open temp file for writing: " + tempFile.getFullPathName());
+        return juce::File();
+    }
+
+    // 4. Configure WAV Writer (Target: 16kHz, 1 Channel, 16-bit)
+    juce::WavAudioFormat wavFormat;
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wavFormat.createWriterFor(fileStream.get(), 
+                                  targetRate, 
+                                  1,    // Target Channels: Mono
+                                  16,   // Target Bit Depth: 16-bit
+                                  {},   // Metadata
+                                  0)    // Quality
+    );
+
+    if (writer == nullptr)
+    {
+        DBG("AudioExtractor: Failed to create WAV writer.");
+        return juce::File();
+    }
+
+    // Pass ownership of stream to writer
+    fileStream.release();
+
+    // 5. Extraction Buffers & Resampler
+    //    Chunk size: 4096 samples (Low memory footprint)
+    const int sourceBlockSize = 4096;
+    
+    // Calculate expected output size per block (+32 safety margin for interpolation)
+    const double resampleRatio = targetRate / sourceRate;
+    const int destBlockSize = (int)(sourceBlockSize * resampleRatio) + 32;
+
+    // Buffer A: Raw data from Host (Multi-channel, Source Rate)
+    juce::AudioBuffer<float> sourceBuffer(numSourceChannels, sourceBlockSize);
+    
+    // Buffer B: Downmixed data (Mono, Source Rate)
+    // Optimization: Downmix BEFORE resampling to save 50% CPU cycles on the interpolator.
+    juce::AudioBuffer<float> monoSourceBuffer(1, sourceBlockSize);
+
+    // Buffer C: Resampled data (Mono, 16kHz)
+    juce::AudioBuffer<float> resampledBuffer(1, destBlockSize);
+
+    // Resampler: Lagrange is ideal for speech analysis (balance of speed/quality)
+    juce::LagrangeInterpolator resampler;
+
+    // 6. Processing Loop
+    int64 samplesRead = 0;
+    
+    DBG("AudioExtractor: Starting extraction. Source Rate: " + juce::String(sourceRate) + 
+        ", Target Rate: 16000, Length: " + juce::String(totalSourceSamples));
+
+    while (samplesRead < totalSourceSamples)
+    {
+        // A. Validation Check (Source Modification)
+        //    If the user edits the file in the DAW while we read, we must abort safely.
+        if (!reader->isValid())
+        {
+            DBG("AudioExtractor: Source invalidated during read. Aborting.");
+            writer.reset(); 
+            tempFile.deleteFile();
+            return juce::File();
+        }
+
+        // B. Calculate Block Size
+        const int numToRead = (int)std::min((int64)sourceBlockSize, totalSourceSamples - samplesRead);
+
+        // C. Read from Host
+        bool readSuccess = reader->read(&sourceBuffer, 
+                                        0,              // Dest start offset
+                                        numToRead,      // Number of samples
+                                        samplesRead,    // Source start sample (int64)
+                                        true,           // Read Left
+                                        numSourceChannels > 1); // Read Right (if exists)
+
+        if (!readSuccess)
+        {
+            DBG("AudioExtractor: Read operation failed.");
+            break;
+        }
+
+        // D. Downmix to Mono (L + R) / 2
+        monoSourceBuffer.clear();
+        monoSourceBuffer.copyFrom(0, 0, sourceBuffer.getReadPointer(0), numToRead); // Left
+
+        if (numSourceChannels > 1)
+        {
+            // Add Right channel and Average
+            monoSourceBuffer.addFrom(0, 0, sourceBuffer.getReadPointer(1), numToRead);
+            monoSourceBuffer.applyGain(0, 0, numToRead, 0.5f); 
+        }
+
+        // E. Resample (Source Rate -> 16kHz)
+        int numOutputSamples = resampler.process(resampleRatio,
+                                                 monoSourceBuffer.getReadPointer(0),
+                                                 resampledBuffer.getWritePointer(0),
+                                                 numToRead);
+
+        // F. Write to Disk
+        if (numOutputSamples > 0)
+        {
+            writer->writeFromAudioSampleBuffer(resampledBuffer, 0, numOutputSamples);
+        }
+
+        samplesRead += numToRead;
+    }
+
+    // 7. Finalize
+    writer.reset();
+    
+    DBG("AudioExtractor: Extraction complete: " + tempFile.getFileName());
+    return tempFile;
+}
+
+juce::File AudioExtractor::getUniqueTempFile (const juce::String& prefix)
+{
+    auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    auto uniqueName = prefix + juce::Uuid().toString() + ".wav";
+    return tempDir.getChildFile(uniqueName);
+}
+
+} // namespace VoxScript

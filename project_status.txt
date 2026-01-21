@@ -1,0 +1,1 @@
+zsh: no such file or directory: ./check_project_status.sh

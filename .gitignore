@@ -1,0 +1,45 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+out/
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# macOS
+.DS_Store
+*.dSYM/
+xcuserdata/
+*.xcworkspace/
+project.xcworkspace/
+
+# Windows
+*.user
+*.suo
+*.sln.docstates
+
+# Plugin binaries (will be copied by JUCE)
+*.vst3
+*.component
+*.aaxplugin
+
+# Generated files
+*.autosave
+Builds/
+
+# Logs
+*.log

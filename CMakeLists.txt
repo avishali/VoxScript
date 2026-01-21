@@ -1,0 +1,357 @@
+cmake_minimum_required(VERSION 3.22)
+
+# ==============================================================================
+# BUILD CONFIGURATION
+# ==============================================================================
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(APPLE)
+    if(IOS)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version" FORCE)
+    else()
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version" FORCE)
+    endif()
+    
+    # ==============================================================================
+    # FIX: Force stable macOS SDK to avoid beta SDK issues (MacOSX26.2.sdk)
+    # ==============================================================================
+    
+    # Check if SDKROOT environment variable is set (user override)
+    if(DEFINED ENV{SDKROOT} AND EXISTS "$ENV{SDKROOT}")
+        set(CMAKE_OSX_SYSROOT "$ENV{SDKROOT}" CACHE PATH "macOS SDK path" FORCE)
+        message(STATUS "Using SDK from SDKROOT: $ENV{SDKROOT}")
+    else()
+        # Try to find a stable SDK (prefer MacOSX.sdk without version suffix)
+        set(SDK_BASE_PATH "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs")
+        
+        # First try: MacOSX.sdk (canonical stable SDK)
+        if(EXISTS "${SDK_BASE_PATH}/MacOSX.sdk")
+            set(CMAKE_OSX_SYSROOT "${SDK_BASE_PATH}/MacOSX.sdk" CACHE PATH "macOS SDK path" FORCE)
+            message(STATUS "Using stable MacOSX SDK: ${SDK_BASE_PATH}/MacOSX.sdk")
+        
+        # Fallback: Try to find versioned SDK (15.x, 14.x, 13.x)
+        elseif(EXISTS "${SDK_BASE_PATH}/MacOSX15.1.sdk")
+            set(CMAKE_OSX_SYSROOT "${SDK_BASE_PATH}/MacOSX15.1.sdk" CACHE PATH "macOS SDK path" FORCE)
+            message(STATUS "Using MacOSX 15.1 SDK")
+        elseif(EXISTS "${SDK_BASE_PATH}/MacOSX15.0.sdk")
+            set(CMAKE_OSX_SYSROOT "${SDK_BASE_PATH}/MacOSX15.0.sdk" CACHE PATH "macOS SDK path" FORCE)
+            message(STATUS "Using MacOSX 15.0 SDK")
+        elseif(EXISTS "${SDK_BASE_PATH}/MacOSX14.5.sdk")
+            set(CMAKE_OSX_SYSROOT "${SDK_BASE_PATH}/MacOSX14.5.sdk" CACHE PATH "macOS SDK path" FORCE)
+            message(STATUS "Using MacOSX 14.5 SDK")
+        elseif(EXISTS "${SDK_BASE_PATH}/MacOSX14.0.sdk")
+            set(CMAKE_OSX_SYSROOT "${SDK_BASE_PATH}/MacOSX14.0.sdk" CACHE PATH "macOS SDK path" FORCE)
+            message(STATUS "Using MacOSX 14.0 SDK")
+        else()
+            message(WARNING "Could not find stable SDK, CMake will use system default (may cause issues with beta SDKs)")
+        endif()
+    endif()
+endif()
+
+option(UniversalBinary "Build universal binary for macOS" OFF)
+if(APPLE AND UniversalBinary AND NOT IOS)
+    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE INTERNAL "")
+endif()
+
+if(WIN32)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# ==============================================================================
+# PLUGIN CONFIGURATION
+# ==============================================================================
+
+set(PLUGIN_NAME "VoxScript" CACHE STRING "Plugin name")
+set(PLUGIN_VERSION_MAJOR 0 CACHE STRING "Plugin version major")
+set(PLUGIN_VERSION_MINOR 1 CACHE STRING "Plugin version minor")
+set(PLUGIN_VERSION_PATCH 0 CACHE STRING "Plugin version patch")
+set(COMPANY_NAME "MelechDSP" CACHE STRING "Company name")
+set(PLUGIN_CODE "VxSc" CACHE STRING "4-character plugin code")
+set(MANUFACTURER_CODE "Melc" CACHE STRING "4-character manufacturer code")
+set(PRODUCT_NAME "${PLUGIN_NAME}" CACHE STRING "Product display name")
+
+set(IS_SYNTH FALSE CACHE BOOL "Is this a synthesizer?")
+set(NEEDS_MIDI_INPUT FALSE CACHE BOOL "Does the plugin need MIDI input?")
+set(NEEDS_MIDI_OUTPUT FALSE CACHE BOOL "Does the plugin need MIDI output?")
+set(IS_MIDI_EFFECT FALSE CACHE BOOL "Is this a MIDI effect?")
+set(EDITOR_WANTS_KEYBOARD_FOCUS TRUE CACHE BOOL "Does the editor need keyboard focus?")
+
+# ==============================================================================
+# DEV MODE (define BEFORE first use)
+# ==============================================================================
+
+option(PLUGIN_DEV_MODE "Fast iteration dev mode (limits formats, disables LTO)" ON)
+
+if(PLUGIN_DEV_MODE)
+    set(PLUGIN_DEV_MODE_VALUE 1)
+    message(STATUS "Build mode: DEV (fast iteration)")
+else()
+    set(PLUGIN_DEV_MODE_VALUE 0)
+    message(STATUS "Build mode: RELEASE")
+endif()
+
+# Plugin formats to build - ARA2 requires VST3 and/or AU
+if(PLUGIN_DEV_MODE)
+    set(PLUGIN_FORMATS "VST3;Standalone" CACHE STRING "Plugin formats to build" FORCE)
+else()
+    set(PLUGIN_FORMATS "AU;VST3;AAX;Standalone" CACHE STRING "Plugin formats to build" FORCE)
+endif()
+
+# ==============================================================================
+# SDK PATHS
+# ==============================================================================
+
+# JUCE Path
+if(NOT DEFINED JUCE_PATH)
+    if(DEFINED ENV{JUCE_PATH})
+        set(JUCE_PATH "$ENV{JUCE_PATH}")
+    else()
+        # Default to SDK folder
+        set(JUCE_PATH "/Users/avishaylidani/DEV/SDK/JUCE")
+    endif()
+endif()
+
+get_filename_component(JUCE_PATH "${JUCE_PATH}" ABSOLUTE)
+
+if(NOT EXISTS "${JUCE_PATH}")
+    message(FATAL_ERROR "JUCE path not found: ${JUCE_PATH}\nPlease set JUCE_PATH env var or -DJUCE_PATH=/path/to/JUCE")
+endif()
+
+# ARA SDK Path (Required for ARA2 support)
+if(NOT DEFINED ARA_SDK_PATH)
+    if(DEFINED ENV{ARA_SDK_PATH})
+        set(ARA_SDK_PATH "$ENV{ARA_SDK_PATH}")
+    else()
+        # Default to SDK folder next to JUCE
+        set(ARA_SDK_PATH "/Users/avishaylidani/DEV/SDK/ARA_SDK")
+    endif()
+endif()
+
+get_filename_component(ARA_SDK_PATH "${ARA_SDK_PATH}" ABSOLUTE)
+
+if(NOT EXISTS "${ARA_SDK_PATH}")
+    message(FATAL_ERROR "ARA SDK path not found: ${ARA_SDK_PATH}\n"
+            "Please download ARA SDK 2.2.0:\n"
+            "  git clone --recursive --branch releases/2.2.0 https://github.com/Celemony/ARA_SDK\n"
+            "Or set ARA_SDK_PATH env var or -DARA_SDK_PATH=/path/to/ARA_SDK")
+endif()
+
+# AAX SDK Path (Required for AAX/Pro Tools support)
+if(NOT DEFINED AAX_SDK_PATH)
+    if(DEFINED ENV{AAX_SDK_PATH})
+        set(AAX_SDK_PATH "$ENV{AAX_SDK_PATH}")
+    else()
+        # Default to SDK folder next to JUCE
+        set(AAX_SDK_PATH "/Users/avishaylidani/DEV/SDK/AAX_SDK")
+    endif()
+endif()
+
+get_filename_component(AAX_SDK_PATH "${AAX_SDK_PATH}" ABSOLUTE)
+
+# AAX is optional - only warn if building AAX format but SDK not found
+if("AAX" IN_LIST PLUGIN_FORMATS)
+    if(NOT EXISTS "${AAX_SDK_PATH}")
+        message(WARNING "AAX SDK path not found: ${AAX_SDK_PATH}\n"
+                "AAX format will be disabled. To enable AAX:\n"
+                "  1. Sign up as AAX developer at Avid\n"
+                "  2. Download AAX SDK from developer.avid.com\n"
+                "  3. Set AAX_SDK_PATH env var or -DAAX_SDK_PATH=/path/to/AAX_SDK")
+        list(REMOVE_ITEM PLUGIN_FORMATS "AAX")
+    else()
+        message(STATUS "AAX SDK found: ${AAX_SDK_PATH}")
+    endif()
+endif()
+
+# ==============================================================================
+# PROJECT SETUP
+# ==============================================================================
+
+project(${PLUGIN_NAME}
+    VERSION ${PLUGIN_VERSION_MAJOR}.${PLUGIN_VERSION_MINOR}.${PLUGIN_VERSION_PATCH}
+    LANGUAGES C CXX
+)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
+
+option(PLUGIN_EDITOR_RESIZABLE "Enable mouse-resizable plugin editor" ON)
+
+# Disable unity builds (best for incremental iteration)
+set(JUCE_BUILD_UNITY_PLUGIN OFF CACHE BOOL "Disable unity build for plugin targets" FORCE)
+
+# ==============================================================================
+# JUCE (must be added BEFORE setting ARA SDK path)
+# ==============================================================================
+
+add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
+
+# ==============================================================================
+# ARA SDK CONFIGURATION (must be set AFTER adding JUCE)
+# ==============================================================================
+
+# Tell JUCE where to find the ARA SDK using the juce_set_ara_sdk_path function
+juce_set_ara_sdk_path("${ARA_SDK_PATH}")
+
+message(STATUS "ARA SDK configured: ${ARA_SDK_PATH}")
+
+# ==============================================================================
+# AAX SDK CONFIGURATION (must be set AFTER adding JUCE)
+# ==============================================================================
+
+# Tell JUCE where to find the AAX SDK if AAX format is enabled
+if("AAX" IN_LIST PLUGIN_FORMATS AND EXISTS "${AAX_SDK_PATH}")
+    juce_set_aax_sdk_path("${AAX_SDK_PATH}")
+    message(STATUS "AAX SDK configured: ${AAX_SDK_PATH}")
+endif()
+
+# ==============================================================================
+# WHISPER.CPP INTEGRATION (Phase II)
+# ==============================================================================
+
+include(CMake/FetchWhisper.cmake)
+
+# ==============================================================================
+# MelechDSP shared modules (via submodule or local path)
+# ==============================================================================
+
+# Check if melechdsp-hq is available via submodule
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq")
+    add_subdirectory(third_party/melechdsp-hq/shared/mdsp_core)
+    add_subdirectory(third_party/melechdsp-hq/shared/mdsp_ui)
+    add_subdirectory(third_party/melechdsp-hq/shared/mdsp_dsp)
+    set(MDSP_AVAILABLE TRUE)
+else()
+    message(WARNING "MelechDSP shared modules not found. Clone with: git submodule add ../melechdsp-hq third_party/melechdsp-hq")
+    set(MDSP_AVAILABLE FALSE)
+endif()
+
+# ==============================================================================
+# PLUGIN TARGET
+# ==============================================================================
+
+juce_add_plugin(${PLUGIN_NAME}
+    VERSION ${PROJECT_VERSION}
+    COMPANY_NAME "${COMPANY_NAME}"
+    IS_SYNTH ${IS_SYNTH}
+    NEEDS_MIDI_INPUT ${NEEDS_MIDI_INPUT}
+    NEEDS_MIDI_OUTPUT ${NEEDS_MIDI_OUTPUT}
+    IS_MIDI_EFFECT ${IS_MIDI_EFFECT}
+    EDITOR_WANTS_KEYBOARD_FOCUS ${EDITOR_WANTS_KEYBOARD_FOCUS}
+    COPY_PLUGIN_AFTER_BUILD TRUE
+    PLUGIN_MANUFACTURER_CODE ${MANUFACTURER_CODE}
+    PLUGIN_CODE ${PLUGIN_CODE}
+    FORMATS ${PLUGIN_FORMATS}
+    PRODUCT_NAME "${PRODUCT_NAME}"
+    
+    # ARA2 CONFIGURATION
+    IS_ARA_EFFECT TRUE
+)
+
+target_sources(${PLUGIN_NAME}
+    PRIVATE
+        Source/PluginProcessor.cpp
+        Source/PluginProcessor.h
+        Source/PluginEditor.cpp
+        Source/PluginEditor.h
+        Source/ara/VoxScriptDocumentController.cpp
+        Source/ara/VoxScriptDocumentController.h
+        Source/ara/VoxScriptAudioSource.cpp
+        Source/ara/VoxScriptAudioSource.h
+        Source/ara/VoxScriptPlaybackRenderer.cpp
+        Source/ara/VoxScriptPlaybackRenderer.h
+        Source/ui/ScriptView.cpp
+        Source/ui/ScriptView.h
+        Source/ui/DetailView.cpp
+        Source/ui/DetailView.h
+        # Phase II: Transcription engine
+        Source/transcription/WhisperEngine.cpp
+        Source/transcription/WhisperEngine.h
+        Source/transcription/VoxSequence.cpp
+        Source/transcription/VoxSequence.h
+        # Phase III: Audio extraction
+        Source/transcription/AudioExtractor.cpp
+        Source/transcription/AudioExtractor.h
+        # Phase III: Audio extraction
+        Source/transcription/AudioExtractor.cpp
+        Source/transcription/AudioExtractor.h
+        # Phase III: Audio extraction
+        Source/transcription/AudioExtractor.cpp
+        Source/transcription/AudioExtractor.h
+)
+
+target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
+
+target_include_directories(${PLUGIN_NAME}
+    PRIVATE
+        Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp
+)
+
+target_compile_definitions(${PLUGIN_NAME}
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JucePlugin_Enable_ARA=1
+    PRIVATE
+        $<$<BOOL:${PLUGIN_EDITOR_RESIZABLE}>:PLUGIN_EDITOR_RESIZABLE=1>
+        PLUGIN_DEV_MODE=${PLUGIN_DEV_MODE_VALUE}
+)
+
+# Link JUCE modules
+target_link_libraries(${PLUGIN_NAME}
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_gui_basics
+        juce::juce_dsp
+        whisper::whisper  # Phase II: Whisper transcription
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# Link MelechDSP modules if available
+if(MDSP_AVAILABLE)
+    target_link_libraries(${PLUGIN_NAME}
+        PRIVATE
+            mdsp_ui
+            mdsp_dsp
+        PUBLIC
+            mdsp_core
+    )
+endif()
+
+# Link LTO flags only for release builds
+if(NOT PLUGIN_DEV_MODE)
+    target_link_libraries(${PLUGIN_NAME} PUBLIC juce::juce_recommended_lto_flags)
+endif()
+
+# ==============================================================================
+# STATUS MESSAGES
+# ==============================================================================
+
+message(STATUS "")
+message(STATUS "==========================================")
+message(STATUS "VoxScript Plugin Configuration:")
+message(STATUS "  Name: ${PLUGIN_NAME}")
+message(STATUS "  Version: ${PROJECT_VERSION}")
+message(STATUS "  Company: ${COMPANY_NAME}")
+message(STATUS "  Formats: ${PLUGIN_FORMATS}")
+message(STATUS "  Dev Mode: ${PLUGIN_DEV_MODE}")
+message(STATUS "  ARA2 Enabled: TRUE")
+message(STATUS "")
+message(STATUS "SDK Paths:")
+message(STATUS "  JUCE: ${JUCE_PATH}")
+message(STATUS "  ARA SDK: ${ARA_SDK_PATH}")
+if("AAX" IN_LIST PLUGIN_FORMATS)
+    message(STATUS "  AAX SDK: ${AAX_SDK_PATH}")
+else()
+    message(STATUS "  AAX SDK: Not enabled (add AAX to PLUGIN_FORMATS in release mode)")
+endif()
+message(STATUS "  MelechDSP Modules: ${MDSP_AVAILABLE}")
+message(STATUS "==========================================")
+message(STATUS "")
