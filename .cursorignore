@@ -1,0 +1,29 @@
+# Exclude third-party whisper.cpp examples from linting
+third_party/whisper.cpp/examples/
+third_party/whisper.cpp/bindings/
+third_party/whisper.cpp/models/
+third_party/whisper.cpp/samples/
+
+# Other third-party build artifacts
+third_party/**/build/
+third_party/**/gradle/
+third_party/**/*.jar
+
+# Ignore all Android-related files and directories
+**/*android*/
+**/*Android*/
+**/*.gradle
+**/gradle/
+**/gradlew
+**/gradlew.bat
+**/gradle-wrapper.properties
+**/build.gradle
+**/settings.gradle
+**/local.properties
+**/AndroidManifest.xml
+**/.gradle/
+**/build/
+**/*.apk
+**/*.aab
+**/*.dex
+**/proguard-rules.pro
