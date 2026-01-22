@@ -8,7 +8,7 @@
 */
 
 #pragma once
-
+                        
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace VoxScript
@@ -78,6 +78,18 @@ private:
     int channelCount { 2 };  // Renamed to avoid shadowing warning
     
     // Phase III: Will add VoxEditList reader, crossfade state, room tone generator
+    
+    // Pre-allocated buffer for RT processing
+    juce::AudioBuffer<float> tempBuffer;
+
+    /**
+     * Helper to calculate the correct sample offset within the Audio Source
+     * for a given playback position relative to a region.
+     */
+    juce::int64 getAudioSourceOffset(ARA::PlugIn::PlaybackRegion* region, juce::int64 offsetInRegion) const
+    {
+        return region->getStartInAudioModificationSamples() + offsetInRegion;
+    }
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptPlaybackRenderer)
 };

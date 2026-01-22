@@ -20,6 +20,56 @@ VoxScriptAudioProcessor::VoxScriptAudioProcessor()
                      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    // Try to initialize file logger with multiple fallback locations
+    juce::File logDir;
+    
+    // Try location 1: ~/Library/Logs/VoxScript (macOS standard)
+    logDir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                 .getChildFile ("Library")
+                 .getChildFile ("Logs")
+                 .getChildFile ("VoxScript");
+    
+    // Create directory if it doesn't exist
+    if (!logDir.exists())
+        logDir.createDirectory();
+    
+    // If still can't create, try Desktop as fallback
+    if (!logDir.exists() || !logDir.isDirectory())
+    {
+        logDir = juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
+                     .getChildFile ("VoxScript_Logs");
+        logDir.createDirectory();
+    }
+    
+    // Create the logger with explicit file path
+    auto timestamp = juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S");
+    auto logFile = logDir.getChildFile ("VoxScript_" + timestamp + ".log");
+    
+    // Use FileLogger constructor directly instead of createDateStampedLogger
+    fileLogger_ = std::make_unique<juce::FileLogger> (logFile, "VoxScript Debug Session");
+    
+    // Set as current logger
+    if (fileLogger_)
+    {
+        juce::Logger::setCurrentLogger (fileLogger_.get());
+        
+        // Write session header
+        juce::Logger::writeToLog ("================================================================================");
+        juce::Logger::writeToLog ("VoxScript Debug Log");
+        juce::Logger::writeToLog ("Started: " + juce::Time::getCurrentTime().toString (true, true));
+        juce::Logger::writeToLog ("Version: 0.1.0");
+        juce::Logger::writeToLog ("ARA Mode: " + juce::String (isBoundToARA() ? "ACTIVE" : "Standalone"));
+        juce::Logger::writeToLog ("Log File: " + fileLogger_->getLogFile().getFullPathName());
+        juce::Logger::writeToLog ("Log Directory: " + logDir.getFullPathName());
+        juce::Logger::writeToLog ("================================================================================");
+        juce::Logger::writeToLog ("");
+    }
+    else
+    {
+        // Fallback to stderr if logger fails
+        std::cerr << "\n[VoxScript] WARNING: Could not create file logger at " << logDir.getFullPathName() << "\n";
+    }
+    
     juce::Logger::writeToLog ("================================================");
     juce::Logger::writeToLog ("    VOXSCRIPT v0.1.0 - PHASE I LOADED");
     juce::Logger::writeToLog ("    ARA2 Text-Based Vocal Editing Plugin");
@@ -31,6 +81,17 @@ VoxScriptAudioProcessor::VoxScriptAudioProcessor()
 VoxScriptAudioProcessor::~VoxScriptAudioProcessor()
 {
     juce::Logger::writeToLog ("VOXSCRIPT: Audio Processor DESTROYED");
+    juce::Logger::writeToLog ("");
+    juce::Logger::writeToLog ("================================================================================");
+    juce::Logger::writeToLog ("Session ended: " + juce::Time::getCurrentTime().toString (true, true));
+    juce::Logger::writeToLog ("================================================================================");
+    
+    // Clear logger before destroying it
+    if (fileLogger_)
+    {
+        juce::Logger::setCurrentLogger (nullptr);
+        fileLogger_.reset();
+    }
 }
 
 //==============================================================================

@@ -1,0 +1,62 @@
+================================================================================
+QUICK FIX: VoxScript Build Errors Resolved
+================================================================================
+
+The build errors were caused by leftover test code. This has been FIXED.
+
+FILES CLEANED UP:
+✅ Source/ara/VoxScriptAudioSource.cpp
+   - Removed testAudioExtractor() function
+   - Removed call to testAudioExtractor() in notifyPropertiesUpdated()
+   - Removed duplicate AudioExtractor.h includes
+
+================================================================================
+REBUILD NOW
+================================================================================
+
+Run these commands in Terminal:
+
+cd /Users/avishaylidani/DEV/GitHubRepo/VoxScript/build-Debug
+ninja
+
+This should now build successfully with the file logging implementation.
+
+================================================================================
+AFTER BUILD SUCCESS
+================================================================================
+
+1. Test the plugin in Reaper:
+   - Open Reaper
+   - Create new track
+   - Add VoxScript as ARA extension
+   - Drag audio file to track
+   - Close Reaper
+
+2. Check for log file:
+   cd ~/Library/Application\ Support/Logs/VoxScript/
+   ls -lh
+   cat VoxScript_*.log
+
+3. You should see a log file with content like:
+   ================================================================================
+   VoxScript Debug Log
+   Started: 2025-01-22 [timestamp]
+   Version: 0.1.0
+   ARA Mode: ACTIVE
+   Log File: /Users/avishay/Library/Application Support/Logs/VoxScript/VoxScript_[timestamp].log
+   ================================================================================
+
+================================================================================
+IF STILL NO LOG FILE
+================================================================================
+
+Monitor system console while loading plugin:
+
+log stream --predicate 'processImagePath contains "REAPER"' --info --debug | grep -i voxscript
+
+This will show:
+- If the plugin loads at all
+- If FileLogger initialization fails
+- Any error messages
+
+================================================================================

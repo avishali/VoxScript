@@ -160,6 +160,7 @@ public:
     WhisperEngine whisperEngine;
     VoxSequence currentTranscription;
     juce::String transcriptionStatus = "Idle";
+    juce::ARAAudioSource* currentAudioSource = nullptr;  // Phase III: Track for sample access cleanup
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptDocumentController)
 };

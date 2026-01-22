@@ -8,7 +8,6 @@
 */
 
 #include "VoxScriptAudioSource.h"
-#include "../transcription/AudioExtractor.h"
 
 namespace VoxScript
 {
@@ -42,10 +41,6 @@ VoxScriptAudioSource::~VoxScriptAudioSource()
 
 void VoxScriptAudioSource::notifyPropertiesUpdated() noexcept
 {
-    std::cerr << "\n\n******************************\n";
-    std::cerr << "PROPERTIES UPDATED!!!\n";
-    std::cerr << "******************************\n\n";
-    
     DBG ("VoxScriptAudioSource: Properties updated");
 }
 

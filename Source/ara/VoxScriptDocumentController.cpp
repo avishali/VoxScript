@@ -69,6 +69,9 @@ juce::ARAAudioModification* VoxScriptDocumentController::doCreateAudioModificati
 {
     DBG ("VOXSCRIPT: Creating Audio Modification for source: " + juce::String (audioSource->getName()));
     
+    // Store reference to current audio source for later cleanup
+    currentAudioSource = audioSource;
+    
     // Enable sample access on the main thread (required by ARA SDK)
     if (auto* docController = audioSource->getDocumentController())
     {
@@ -184,6 +187,17 @@ void VoxScriptDocumentController::transcriptionComplete (VoxSequence sequence)
     transcriptionStatus = "Ready";
     DBG ("Transcription complete: " + juce::String (sequence.getWordCount()) + " words");
     
+    // Disable sample access now that transcription is done
+    if (currentAudioSource != nullptr)
+    {
+        if (auto* docController = currentAudioSource->getDocumentController())
+        {
+            docController->enableAudioSourceSamplesAccess (ARA::PlugIn::toRef (currentAudioSource), false);
+            DBG ("Sample access disabled for source: " + juce::String (currentAudioSource->getName()));
+        }
+        currentAudioSource = nullptr;
+    }
+    
     // Notify listeners (like the UI Editor)
     notifyTranscriptionUpdated (nullptr);
 }
@@ -192,6 +206,17 @@ void VoxScriptDocumentController::transcriptionFailed (const juce::String& error
 {
     transcriptionStatus = "Failed: " + error;
     DBG ("Transcription error: " + error);
+    
+    // Disable sample access even on failure
+    if (currentAudioSource != nullptr)
+    {
+        if (auto* docController = currentAudioSource->getDocumentController())
+        {
+            docController->enableAudioSourceSamplesAccess (ARA::PlugIn::toRef (currentAudioSource), false);
+            DBG ("Sample access disabled after error for source: " + juce::String (currentAudioSource->getName()));
+        }
+        currentAudioSource = nullptr;
+    }
 }
 
 } // namespace VoxScript

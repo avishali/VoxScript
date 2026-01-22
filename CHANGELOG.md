@@ -151,6 +151,23 @@ All notable changes to VoxScript will be documented in this file.
 
 **Next:** Phase III Task 2 - Text editing and VoxEditList
 
+## Phase III: Task 1B - Audio Passthrough Fix (Completed - 2026-01-22)
+
+### Fixed
+- **Audio Passthrough**: Corrected critical logic error in `VoxScriptPlaybackRenderer`.
+  - **Issue**: Read offset was calculated incorrectly (relative to buffer start instead of audio source start).
+  - **Fix**: Implemented `getAudioSourceOffset` helper to map playback time → audio source sample index.
+  - **Result**: Audio now plays back correctly in ARA host.
+  
+- **Real-Time Safety**:
+  - Replaced `std::vector` allocation in audio thread (RT violation) with fixed stack array.
+  - Verified no heap allocations during playback.
+
+### Technical Details
+- Added rigorous RT-safe debug logging (temporarily used for verification) to identify offset mismatches.
+- Removed debug logging for production readiness.
+
+
 ## Phase III: Alignment and Editing (Planned)
 
 ### To Be Added

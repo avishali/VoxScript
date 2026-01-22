@@ -93,6 +93,8 @@ public:
 
 private:
     //==========================================================================
+    // Debug logging
+    std::unique_ptr<juce::FileLogger> fileLogger_;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptAudioProcessor)
 };
