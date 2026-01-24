@@ -16,6 +16,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 #include "VoxSequence.h"
+#include "../engine/AudioCache.h"
 #include "AudioExtractor.h"
 #include <atomic>
 
@@ -109,15 +110,12 @@ public:
      */
     void run() override;
 
+    /** Set the AudioCache to use for extraction */
+    void setAudioCache(AudioCache* cache) { audioCache = cache; }
+
 private:
     //==========================================================================
-    juce::ListenerList<Listener> listeners;
-    juce::ARAAudioSource* currentAudioSource = nullptr;
-    juce::File currentAudioFile;
-    // AudioExtractor is static, removed member instance
-
-    std::atomic<bool> shouldCancel {false};
-    
+    // Internal state
     // Opaque pointer to whisper_context (forward declared above)
     // We don't include whisper.h in header to avoid polluting namespace
     ::whisper_context* ctx = nullptr;
@@ -149,6 +147,15 @@ private:
      * Notify listeners of failure (dispatched to message thread)
      */
     void notifyFailed (const juce::String& error);
+    
+    //==========================================================================
+    // Member Variables
+    
+    juce::ListenerList<Listener> listeners;
+    juce::ARAAudioSource* currentAudioSource = nullptr;
+    juce::File currentAudioFile;
+    std::atomic<bool> shouldCancel { false };
+    AudioCache* audioCache = nullptr;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WhisperEngine)
 };

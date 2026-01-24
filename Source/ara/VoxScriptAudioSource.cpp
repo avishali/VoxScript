@@ -141,7 +141,8 @@ void VoxScriptAudioSource::runTranscriptionOnBackgroundThread(VoxScriptDocumentC
     transcriptionStatus = "Extracting audio...";
     
     VOXLOG("Calling AudioExtractor::extractToTempWAV()...");
-    tempAudioFile = AudioExtractor::extractToTempWAV(this, "voxscript_");
+    // Mission 2: Use AudioCache from controller
+    tempAudioFile = AudioExtractor::extractToTempWAV(this, docController->getAudioCache(), "voxscript_");
     
     if (!tempAudioFile.existsAsFile())
     {
@@ -203,7 +204,8 @@ void VoxScriptAudioSource::triggerTranscription()
     transcriptionStatus = "Extracting audio...";
     
     VOXLOG("Calling AudioExtractor::extractToTempWAV()...");
-    tempAudioFile = AudioExtractor::extractToTempWAV(this, "voxscript_");
+    // Mission 2: Use AudioCache from controller
+    tempAudioFile = AudioExtractor::extractToTempWAV(this, docController->getAudioCache(), "voxscript_");
     
     if (!tempAudioFile.existsAsFile())
     {

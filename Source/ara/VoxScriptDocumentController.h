@@ -15,9 +15,11 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "../transcription/WhisperEngine.h"
+#include "../transcription/WhisperEngine.h" // Phase II
 #include "../transcription/VoxSequence.h"
-#include "../transcription/AudioExtractor.h"
+#include "../transcription/AudioExtractor.h" // Phase II
+#include "VoxScriptDocumentStore.h"
+#include "../engine/AudioCache.h" // Mission 2
 
 namespace VoxScript
 {
@@ -155,9 +157,21 @@ public:
     /** Accessor for the WhisperEngine instance (Phase III) */
     WhisperEngine& getWhisperEngine() { return whisperEngine; }
 
+    /** Accessor for the Document Store (Mission 1) */
+    VoxScriptDocumentStore& getStore() { return documentStore; }
+
+    /** Accessor for the Audio Cache (Mission 2) */
+    AudioCache& getAudioCache() { return audioCache; }
+
     private:
     //==========================================================================
     juce::ListenerList<Listener> listeners;
+    
+    // Mission 1: Document Persistence
+    VoxScriptDocumentStore documentStore;
+
+    // Mission 2: Audio Cache
+    AudioCache audioCache;
     
     // Phase II/III: Transcription and Audio Extraction
     WhisperEngine whisperEngine;

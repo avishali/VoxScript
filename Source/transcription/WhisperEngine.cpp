@@ -11,6 +11,7 @@
 */
 
 #include "WhisperEngine.h"
+#include "../engine/AudioCache.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <whisper.h>
 
@@ -131,9 +132,15 @@ void WhisperEngine::run()
     if (currentAudioSource != nullptr)
     {
         DBG ("WhisperEngine: Extracting audio from source...");
+        if (audioCache == nullptr)
+        {
+             notifyFailed ("AudioCache not set in WhisperEngine");
+             return;
+        }
+        
         notifyProgress (0.0f); // Signal start
         
-        currentAudioFile = AudioExtractor::extractToTempWAV (currentAudioSource);
+        currentAudioFile = AudioExtractor::extractToTempWAV (currentAudioSource, *audioCache);
 
         
         if (!currentAudioFile.existsAsFile())

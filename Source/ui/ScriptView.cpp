@@ -104,25 +104,50 @@ void ScriptView::setDocumentController(VoxScriptDocumentController* controller)
 
 void ScriptView::timerCallback()
 {
-    // Poll document controller for status updates
-    // Note: Proper observer pattern will be implemented in Phase IV
+    // Poll document controller for status updates & transcription data
+    // Phase III: Using DocumentSnapshot (Mission 1)
     
     if (documentController == nullptr)
         return;
     
+    // 1. Update Status
     auto newStatus = documentController->getTranscriptionStatus();
     if (newStatus != statusText)
     {
         setStatus(newStatus);
     }
     
-    // Check if transcription updated
-    auto& transcription = documentController->getTranscription();
+    // 2. Poll Store for Data
+    // We take a thread-safe snapshot
+    auto snapshot = documentController->getStore().makeSnapshot();
     
-    if (newStatus == "Ready" && !transcription.getSegments().isEmpty() 
-        && transcription.getSegments().size() != currentSequence.getSegments().size())
+    // For this phase, we display the first available transcription found in the snapshot.
+    // In future phases, we will track the 'selected' AudioSourceID.
+    if (!snapshot.transcriptions.empty())
     {
-        setTranscription(transcription);
+        const auto& seq = snapshot.transcriptions.begin()->second;
+        
+        // Simple dirtiness check: segment count or just forced refresh if ready
+        if (seq.getSegments().size() != currentSequence.getSegments().size() || newStatus == "Ready")
+        {
+            // Only update if it looks different to avoid repaint spam, unless it's "Ready" (completed)
+             // A better dirtiness check would be version/timestamp, but segment count is a proxy for now.
+             // If equal count but content changed? We might miss it.
+             // Let's assume for now updates always grow or we only care when done.
+             // Actually, transcriptionComplete updates the store.
+             // Let's just update if counts differ OR if we are in a transient state.
+             // But to be safe for Mission 1 verification:
+             // If we have content in store and local is empty -> update.
+             if (currentSequence.getSegments().isEmpty() && !seq.getSegments().isEmpty())
+             {
+                 setTranscription(seq);
+             }
+             // If lengths differ -> update
+             else if (seq.getSegments().size() != currentSequence.getSegments().size())
+             {
+                 setTranscription(seq);
+             }
+        }
     }
 }
 

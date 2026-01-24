@@ -267,6 +267,8 @@ target_sources(${PLUGIN_NAME}
         Source/ara/VoxScriptDocumentController.h
         Source/ara/VoxScriptAudioSource.cpp
         Source/ara/VoxScriptAudioSource.h
+        Source/ara/VoxScriptDocumentStore.cpp
+        Source/ara/VoxScriptDocumentStore.h
         Source/ara/VoxScriptPlaybackRenderer.cpp
         Source/ara/VoxScriptPlaybackRenderer.h
         Source/ui/ScriptView.cpp
@@ -281,6 +283,9 @@ target_sources(${PLUGIN_NAME}
         # Phase III: Audio extraction
         Source/transcription/AudioExtractor.cpp
         Source/transcription/AudioExtractor.h 
+        # Mission 2: Audio Cache
+        Source/engine/AudioCache.cpp
+        Source/engine/AudioCache.h
         # Utilities - ADD THIS SECTION
         Source/util/VoxLogger.h
         

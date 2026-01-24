@@ -68,4 +68,70 @@ double VoxSequence::getTotalDuration() const
     return end - start;
 }
 
+juce::ValueTree VoxSequence::toValueTree() const
+{
+    juce::ValueTree vt("SEQUENCE");
+    vt.setProperty("duration", getTotalDuration(), nullptr);
+    
+    for (const auto& seg : segments)
+    {
+        juce::ValueTree segNode("SEGMENT");
+        segNode.setProperty("start", seg.startTime, nullptr);
+        segNode.setProperty("end", seg.endTime, nullptr);
+        segNode.setProperty("text", seg.text, nullptr);
+        
+        // Serialize words
+        for (const auto& w : seg.words)
+        {
+             juce::ValueTree wordNode("WORD");
+             wordNode.setProperty("s", w.startTime, nullptr);
+             wordNode.setProperty("e", w.endTime, nullptr);
+             wordNode.setProperty("t", w.text, nullptr);
+             wordNode.setProperty("c", w.confidence, nullptr);
+             segNode.addChild(wordNode, -1, nullptr);
+        }
+        
+        vt.addChild(segNode, -1, nullptr);
+    }
+    return vt;
+}
+
+bool VoxSequence::fromValueTree(const juce::ValueTree& vt)
+{
+    if (!vt.isValid() || vt.getType().toString() != "SEQUENCE")
+        return false;
+        
+    clear();
+    
+    // Iterate over SEGMENT children
+    for (const auto& segNode : vt)
+    {
+        if (segNode.getType().toString() == "SEGMENT")
+        {
+            VoxSegment s;
+            s.startTime = segNode.getProperty("start");
+            s.endTime = segNode.getProperty("end");
+            s.text = segNode.getProperty("text");
+            
+            // Deserialize words
+            for (const auto& wordNode : segNode)
+            {
+                if (wordNode.getType().toString() == "WORD")
+                {
+                    VoxWord w;
+                    w.startTime = wordNode.getProperty("s");
+                    w.endTime = wordNode.getProperty("e");
+                    w.text = wordNode.getProperty("t");
+                    w.confidence = wordNode.getProperty("c");
+                    s.words.add(w);
+                }
+            }
+            
+            addSegment(s);
+        }
+    }
+    
+    return true;
+}
+
 } // namespace VoxScript

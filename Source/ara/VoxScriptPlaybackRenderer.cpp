@@ -8,6 +8,7 @@
 */
 
 #include "VoxScriptPlaybackRenderer.h"
+#include "VoxScriptDocumentController.h"
 
 namespace VoxScript
 
@@ -112,31 +113,36 @@ bool VoxScriptPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         if (!audioSource)
             continue;
         
-        // Use ARA's host audio reader to get samples
-        ARA::PlugIn::HostAudioReader reader(audioSource);
+        // Mission 2: Use AudioCache
+        // First, get the controller and cache
+        auto* docController = dynamic_cast<VoxScriptDocumentController*>(getDocumentController());
+        if (!docController) continue;
         
-        // RT-SAFE: Use pre-allocated member buffer
-        if (overlapLength > tempBuffer.getNumSamples())
-            continue;
-            
-        // RT-SAFE: Use fixed array
-        void* bufferPtrs[16]; 
-        int numChans = juce::jmin(tempBuffer.getNumChannels(), 16);
+        auto& audioCache = docController->getAudioCache();
+        const auto* cachedAudio = audioCache.get(audioSource);
         
-        for (int ch = 0; ch < numChans; ++ch)
-            bufferPtrs[ch] = tempBuffer.getWritePointer(ch);
-        
-        // Read from the calculated SOURCE position
-        if (reader.readAudioSamples(startPosInAudioSource, (int)overlapLength, bufferPtrs))
+        if (cachedAudio)
         {
-            // Add to output buffer
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            // Read from cached buffer
+            const auto& sourceBuffer = cachedAudio->buffer;
+            
+            // Map the source offset to our buffer
+            if (startPosInAudioSource >= 0 && startPosInAudioSource + overlapLength <= sourceBuffer.getNumSamples())
             {
-                if (ch < numChans)
+                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
                 {
-                    buffer.addFrom(ch, offsetInBuffer, tempBuffer, ch, 0, (int)overlapLength);
+                    // Map output channel to source channel (modulo for safety)
+                    int sourceCh = ch % sourceBuffer.getNumChannels();
+                    
+                    buffer.addFrom(ch, offsetInBuffer, sourceBuffer, sourceCh, (int)startPosInAudioSource, (int)overlapLength);
                 }
             }
+        }
+        else
+        {
+            // Cache miss - silence (already cleared)
+            // Ideally trigger cache creation here or log it
+            // But strict NO ALLOC in render path.
         }
     }
     

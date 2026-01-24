@@ -40,6 +40,9 @@ juce::ARAAudioSource* VoxScriptDocumentController::doCreateAudioSource (
     // Register as listener for transcription events
     whisperEngine.addListener (this);
     
+    // Mission 2: Ensure WhisperEngine has access to AudioCache
+    whisperEngine.setAudioCache(&audioCache);
+    
     return audioSource;
 }
 
@@ -57,6 +60,7 @@ void VoxScriptDocumentController::doDestroyAudioSource (
     juce::ARAAudioSource* audioSource) noexcept
 {
     DBG ("VoxScriptDocumentController: Destroying audio source");
+    audioCache.remove(audioSource);
     delete audioSource;
 }
 
@@ -158,34 +162,52 @@ juce::ARAPlaybackRenderer* VoxScriptDocumentController::doCreatePlaybackRenderer
 //==============================================================================
 // State Persistence
 
-bool VoxScriptDocumentController::doRestoreObjectsFromStream (
-    juce::ARAInputStream& input,
-    const juce::ARARestoreObjectsFilter* filter) noexcept
+bool VoxScriptDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream& input,
+                                                              const juce::ARARestoreObjectsFilter* filter) noexcept
 {
     DBG ("================================================");
     DBG ("VOXSCRIPT: Restoring state from stream");
     DBG ("================================================");
     
-    // Phase I: Just return true (no data to restore yet)
-    // Phase II/III: Restore VoxSequence transcription data and edits
+    // Read the entire stream into a memory block
+    juce::MemoryBlock data;
     
-    juce::ignoreUnused (input, filter);
-    return true;
+    // Read strictly what is available
+    int64 bytesLeft = input.getTotalLength() - input.getPosition();
+    if (bytesLeft > 0)
+    {
+        data.setSize((size_t)bytesLeft);
+        if (!input.read(data.getData(), (size_t)bytesLeft))
+            return false;
+            
+        // Deserialize the store
+        if (documentStore.deserialize(data.getData(), data.getSize()))
+        {
+            // Propagate updates to listeners/UI if needed
+            // For now, just logging
+            DBG ("VOXSCRIPT: Document store deserialized successfully.");
+            return true;
+        }
+        DBG ("VOXSCRIPT: Document store deserialization FAILED.");
+    }
+    
+    juce::ignoreUnused (filter); // Filter is not used in this implementation
+    return false; // Return false if no data or deserialization failed
 }
 
-bool VoxScriptDocumentController::doStoreObjectsToStream (
-    juce::ARAOutputStream& output,
-    const juce::ARAStoreObjectsFilter* filter) noexcept
+bool VoxScriptDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& output,
+                                                            const juce::ARAStoreObjectsFilter* filter) noexcept
 {
     DBG ("================================================");
     DBG ("VOXSCRIPT: Storing state to stream");
     DBG ("================================================");
     
-    // Phase I: Just return true (no data to store yet)
-    // Phase II/III: Store VoxSequence transcription data and edits
+    // Serialize the store
+    juce::MemoryBlock data = documentStore.serialize();
     
-    juce::ignoreUnused (output, filter);
-    return true;
+    // Write to ARA stream
+    juce::ignoreUnused (filter); // Filter is not used in this implementation
+    return output.write(data.getData(), data.getSize());
 }
 
 //==============================================================================
@@ -220,13 +242,18 @@ void VoxScriptDocumentController::transcriptionProgress (float progress)
 
 void VoxScriptDocumentController::transcriptionComplete (VoxSequence sequence)
 {
-    currentTranscription = sequence;
-    transcriptionStatus = "Ready";
-    DBG ("Transcription complete: " + juce::String (sequence.getWordCount()) + " words");
-    
-    // Disable sample access now that transcription is done
+    // Update the store
     if (currentAudioSource != nullptr)
     {
+        AudioSourceID id = documentStore.getOrCreateAudioSourceID(currentAudioSource);
+        documentStore.updateTranscription(id, sequence);
+        
+        // Notify UI via legacy method (will update later)
+        currentTranscription = sequence;
+        transcriptionStatus = "Ready";
+        DBG ("Transcription complete: " + juce::String (sequence.getWordCount()) + " words");
+        
+        // Disable sample access now that transcription is done
         if (auto* docController = currentAudioSource->getDocumentController())
         {
             docController->enableAudioSourceSamplesAccess (ARA::PlugIn::toRef (currentAudioSource), false);

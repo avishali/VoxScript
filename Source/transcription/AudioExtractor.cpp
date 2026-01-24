@@ -13,6 +13,7 @@
 */
 
 #include "AudioExtractor.h"
+#include "../engine/AudioCache.h"
 
 namespace VoxScript
 {
@@ -21,32 +22,37 @@ namespace VoxScript
 // Public API
 
 juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource, 
+                                             AudioCache& audioCache,
                                              const juce::String& tempFilePrefix)
 {
     // 1. Validate Input
-    //    Ensure sample access is enabled before attempting to read
     if (araSource == nullptr || !araSource->isSampleAccessEnabled())
     {
         DBG ("AudioExtractor: Source is null or sample access not enabled");
         return juce::File();
     }
-
-    // 2. Create Reader (THREAD SAFETY CRITICAL)
-    //    Instantiate reader in LOCAL SCOPE to satisfy Steinberg/Nuendo 
-    //    threading requirements. Passing reader across threads causes glitches.
-    auto reader = std::make_unique<juce::ARAAudioSourceReader> (araSource);
-
-    if (reader == nullptr || reader->lengthInSamples == 0)
+    
+    // Mission 2: Use AudioCache
+    // ensureCached handles the reading from host
+    if (!audioCache.ensureCached(araSource, araSource))
     {
-        DBG ("AudioExtractor: Failed to create reader or source is empty");
+        DBG ("AudioExtractor: Failed to cache audio");
+        return juce::File();
+    }
+    
+    const CachedAudio* cached = audioCache.get(araSource);
+    if (cached == nullptr)
+    {
+        DBG ("AudioExtractor: Cache retrieval failed");
         return juce::File();
     }
 
-    const double sourceRate = reader->sampleRate;
-    const int numSourceChannels = static_cast<int> (reader->numChannels);
-    const int64 totalSourceSamples = reader->lengthInSamples;
+    const double sourceRate = cached->sampleRate;
+    // Use the actual channel count from the buffer, not the original source properties necessarily, though they should match
+    const int numSourceChannels = cached->numChannels; 
+    const int64 totalSourceSamples = cached->numSamples;
 
-    DBG ("AudioExtractor: Starting extraction");
+    DBG ("AudioExtractor: Starting extraction from Cache");
     DBG ("  Source: " + juce::String (sourceRate) + " Hz, " + 
          juce::String (numSourceChannels) + " ch, " + 
          juce::String (totalSourceSamples) + " samples");
@@ -112,35 +118,24 @@ juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource,
 
     while (samplesRead < totalSourceSamples && !aborted)
     {
-        // A. Validate Source (detect live edits)
-        //    If user modifies audio in DAW during extraction, abort safely
-        if (!reader->isValid())
-        {
-            DBG ("AudioExtractor: Source invalidated during read (user edit). Aborting.");
-            aborted = true;
-            break;
-        }
+        // A. Validate Source
+        // Since we are reading from immutable cache, we don't need to check reader->isValid().
+        // However, if we wanted to support cancellation, we would check a token here.
 
         // B. Calculate chunk size for this iteration
         const int numToRead = static_cast<int> (
             juce::jmin (static_cast<int64> (CHUNK_SIZE), totalSourceSamples - samplesRead)
         );
 
-        // C. Read from ARA host
-        bool readSuccess = reader->read (
-            &sourceBuffer,
-            0,                              // Destination start offset
-            numToRead,                      // Number of samples to read
-            samplesRead,                    // Source start position
-            true,                           // Read left channel
-            numSourceChannels > 1           // Read right channel (if exists)
-        );
-
-        if (!readSuccess)
+        // C. Read from Cache
+        
+        // We can just copy from the cached buffer
+        // De-interleave if needed (though CachedAudio uses AudioBuffer which is planar)
+        // copyFrom is per-channel
+        
+        for (int ch = 0; ch < numSourceChannels; ++ch)
         {
-            DBG ("AudioExtractor: Read operation failed at sample " + juce::String (samplesRead));
-            aborted = true;
-            break;
+             sourceBuffer.copyFrom(ch, 0, cached->buffer, ch, (int)samplesRead, numToRead);
         }
 
         // D. Downmix to Mono

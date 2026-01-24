@@ -44,6 +44,10 @@ public:
         s.text = text;
         addSegment(s);
     }
+    
+    // Serialization
+    juce::ValueTree toValueTree() const;
+    bool fromValueTree(const juce::ValueTree& vt);
 
 private:
     juce::Array<VoxSegment> segments;

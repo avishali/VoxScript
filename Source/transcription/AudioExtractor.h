@@ -22,6 +22,8 @@
 namespace VoxScript
 {
 
+class AudioCache;
+
 /**
  * @brief Utility class for extracting audio from ARA sources
  * 
@@ -63,6 +65,7 @@ public:
      * @endcode
      */
     static juce::File extractToTempWAV (juce::ARAAudioSource* araSource, 
+                                        AudioCache& audioCache,
                                         const juce::String& tempFilePrefix = "voxscript_");
     
     //==========================================================================
