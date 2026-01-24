@@ -43,117 +43,56 @@ namespace VoxScript
  * Phase II: Basic transcription with ggml-base.en model
  * Phase III: Model selection, cancellation, queue management
  */
-class WhisperEngine : public juce::Thread
+class WhisperEngine
 {
 public:
     WhisperEngine();
-    ~WhisperEngine() override;
+    ~WhisperEngine();
     
     //==========================================================================
-    /**
-     * @brief Listener interface for transcription callbacks
-     * 
-     * All callbacks are dispatched on the message thread for UI safety.
-     */
-    class Listener
-    {
-    public:
-        virtual ~Listener() = default;
-        
-        /**
-         * Called periodically during transcription
-         * @param progress Value between 0.0 and 1.0
-         */
-        virtual void transcriptionProgress (float progress) = 0;
-        
-        /**
-         * Called when transcription completes successfully
-         * @param sequence The complete transcription result
-         */
-        virtual void transcriptionComplete (VoxSequence sequence) = 0;
-        
-        /**
-         * Called when transcription fails
-         * @param error Human-readable error message
-         */
-        virtual void transcriptionFailed (const juce::String& error) = 0;
-    };
-    
-    //==========================================================================
-    void addListener (Listener* listener);
-    void removeListener (Listener* listener);
+    // Phase III: Synchronous API (driven by TranscriptionJobQueue)
     
     /**
-     * Start transcription of an ARA audio source
-     * This is non-blocking - extraction and transcription happen on background thread
+     * @brief Process an audio file synchronously.
+     * This blocks until transcription is complete or cancelled.
      * 
-     * @param audioSource The ARA audio source to transcribe
+     * @param audioFile Path to audio file
+     * @return VoxSequence Resulting transcription (empty on failure/cancel)
      */
-    void transcribeAudioSource (juce::ARAAudioSource* audioSource);
-    
+    VoxSequence processSync (const juce::File& audioFile);
+
     /**
-     * Start transcription of an audio file
-     * This is non-blocking - transcription happens on background thread
+     * @brief Process an audio source synchronously.
+     * Extracts audio to temp file, processes it, then deletes temp file.
      * 
-     * @param audioFile Path to audio file (WAV, MP3, etc.)
+     * @param source ARA Audio Source to process
+     * @return VoxSequence Resulting transcription
      */
-    void transcribeAudioFile (const juce::File& audioFile);
-    
+    VoxSequence processSync (juce::ARAAudioSource* source);
+
     /**
      * Cancel ongoing transcription
-     * Thread will stop gracefully at next checkpoint
+     * Thread-safe.
      */
     void cancelTranscription();
     
-    /**
-     * Thread implementation - runs transcription in background
-     */
-    void run() override;
-
     /** Set the AudioCache to use for extraction */
     void setAudioCache(AudioCache* cache) { audioCache = cache; }
 
 private:
     //==========================================================================
     // Internal state
-    // Opaque pointer to whisper_context (forward declared above)
-    // We don't include whisper.h in header to avoid polluting namespace
     ::whisper_context* ctx = nullptr;
     
     //==========================================================================
     /**
      * Load whisper model from disk
-     * Phase II: Hardcoded path to ggml-base.en.bin
-     * Phase III: User-configurable model selection
      */
     void loadModel();
-    
-    /**
-     * Process the current audio file and generate VoxSequence
-     */
-    void processAudio();
-    
-    /**
-     * Notify listeners of progress (dispatched to message thread)
-     */
-    void notifyProgress (float progress);
-    
-    /**
-     * Notify listeners of completion (dispatched to message thread)
-     */
-    void notifyComplete (VoxSequence sequence);
-    
-    /**
-     * Notify listeners of failure (dispatched to message thread)
-     */
-    void notifyFailed (const juce::String& error);
     
     //==========================================================================
     // Member Variables
     
-    juce::ListenerList<Listener> listeners;
-    juce::ARAAudioSource* currentAudioSource = nullptr;
-    juce::File currentAudioFile;
     std::atomic<bool> shouldCancel { false };
     AudioCache* audioCache = nullptr;
     

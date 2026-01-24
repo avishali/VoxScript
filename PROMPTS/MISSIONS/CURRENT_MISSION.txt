@@ -1,31 +1,62 @@
-Mission 9 — Add AudioCache to Build
+Mission 3 — Add TranscriptionJobQueue and Isolate Whisper
 
 Implementer Prompt (Paste-Ready)
 
 Return only the final modified files. No markdown. No explanation.
-C++17, JUCE, ARA. Must compile on macOS.
+C++17, JUCE. Must compile on macOS. ARA-safe.
 
-TASK: Add AudioCache source files to CMakeLists.txt to fix linker error.
+TASK: Add a job queue to run Whisper transcription off the realtime paths and publish results safely.
 
 GOALS:
-	1.	Modify CMakeLists.txt:
-	•	Add `Source/engine/AudioCache.cpp` and `Source/engine/AudioCache.h` to the `target_sources` list for the plugin target.
+	1.	Add Source/engine/TranscriptionJobQueue.h + .cpp
+	•	Single worker thread.
+	•	enqueueTranscription(AudioSourceID id, JobSpec spec)
+	•	cancellation:
+	•	cancelAll()
+	•	cancelForAudioSource(id)
+	•	generation tokens to avoid applying stale results after document changes.
+	2.	WhisperEngine call sites:
+	•	WhisperEngine can remain as-is, but MUST be invoked only by TranscriptionJobQueue.
+	•	Remove any Whisper invocation from ARA callbacks or UI direct calls; replace with enqueue.
+	3.	Result publication:
+	•	On job completion, post to message thread:
+DocumentStore::applyTranscriptionResult(AudioSourceID, VoxSequence newSeq, meta)
+	•	Store increments version; UI refresh picks it up.
+	4.	Lifecycle:
+	•	DocumentController owns TranscriptionJobQueue.
+	•	On destruction/restore, cancel jobs.
 
 CONSTRAINTS:
-	•	Minimal diff.
+	•	No deadlocks between store mutex and job thread.
+	•	No UI calls from worker thread.
 
-FILES TO MODIFY:
-	•	CMakeLists.txt
+FILES TO ADD:
+	•	Source/engine/TranscriptionJobQueue.h
+	•	Source/engine/TranscriptionJobQueue.cpp
+
+FILES TO MODIFY (expected):
+	•	Source/engine/WhisperEngine.h/.cpp (call sites only)
+	•	Source/ara/VoxScriptDocumentController.h/.cpp
+	•	Source/ui/DetailView.h/.cpp or ScriptView (where transcription is triggered)
 
 DELIVERABLE:
-Provide final content for each changed/added file in IMPLEMENTER_RESULT.md.
+Provide final content for each changed/added file.
 
 Verifier Prompt (Paste-Ready)
 
-Return only a verification report.
+Return only a verification report with:
+	•	changed files
+	•	build steps
+	•	runtime verification steps and results
+	•	threading correctness notes
 
 VERIFY:
-	1.	Build succeeds: Debug.
-	2.	Verify play/stop stability briefly.
+	1.	Start transcription, then:
+	•	Move playhead, add/remove region, close project
+	•	No crash, no stale result applied after close
+	2.	Confirm Whisper only runs on worker thread:
+	•	add logging of thread id/name in Debug and confirm
+	3.	Confirm results update UI reliably after completion.
+	4.	Confirm cancellation works (job stops or results ignored).
 
 ⸻

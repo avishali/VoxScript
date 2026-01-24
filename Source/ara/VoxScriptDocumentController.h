@@ -20,6 +20,7 @@
 #include "../transcription/AudioExtractor.h" // Phase II
 #include "VoxScriptDocumentStore.h"
 #include "../engine/AudioCache.h" // Mission 2
+#include "../engine/TranscriptionJobQueue.h" // Mission 3
 
 namespace VoxScript
 {
@@ -33,12 +34,12 @@ namespace VoxScript
  * - Coordinates between the UI thread and audio processing thread
  * - Persists transcription data in the ARA archive
  * - Manages background transcription via WhisperEngine (Phase II)
+ * - Uses TranscriptionJobQueue for serializing transcription tasks (Mission 3)
  * 
  * From PDF Section 3.1.1: "It receives notifications from the host when audio 
  * clips are added, removed, or modified in the DAW timeline."
  */
-class VoxScriptDocumentController : public juce::ARADocumentControllerSpecialisation,
-                                     private WhisperEngine::Listener
+class VoxScriptDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
     //==========================================================================
@@ -162,6 +163,12 @@ public:
 
     /** Accessor for the Audio Cache (Mission 2) */
     AudioCache& getAudioCache() { return audioCache; }
+    
+    /**
+     * @brief Enqueue a transcription job for the given source.
+     * Thread-safe. Called by VoxScriptAudioSource or internally.
+     */
+    void enqueueTranscriptionForSource(juce::ARAAudioSource* source);
 
     private:
     //==========================================================================
