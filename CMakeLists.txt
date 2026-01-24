@@ -251,6 +251,12 @@ juce_add_plugin(${PLUGIN_NAME}
     IS_ARA_EFFECT TRUE
 )
 
+    # ------------------------------------------------------------------------------
+    # FIX: GENERATE JUCE HEADER
+    # ------------------------------------------------------------------------------
+    juce_generate_juce_header(${PLUGIN_NAME})  # << ADD THIS LINE
+    # ------------------------------------------------------------------------------
+
 target_sources(${PLUGIN_NAME}
     PRIVATE
         Source/PluginProcessor.cpp
@@ -274,16 +280,10 @@ target_sources(${PLUGIN_NAME}
         Source/transcription/VoxSequence.h
         # Phase III: Audio extraction
         Source/transcription/AudioExtractor.cpp
-        Source/transcription/AudioExtractor.h
-        # Phase III: Audio extraction
-        Source/transcription/AudioExtractor.cpp
-        Source/transcription/AudioExtractor.h
-        # Phase III: Audio extraction
-        Source/transcription/AudioExtractor.cpp
-        Source/transcription/AudioExtractor.h
-        # Phase III: Audio extraction
-        Source/transcription/AudioExtractor.cpp
-        Source/transcription/AudioExtractor.h
+        Source/transcription/AudioExtractor.h 
+        # Utilities - ADD THIS SECTION
+        Source/util/VoxLogger.h
+        
 )
 
 target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
@@ -304,6 +304,7 @@ target_compile_definitions(${PLUGIN_NAME}
         $<$<BOOL:${PLUGIN_EDITOR_RESIZABLE}>:PLUGIN_EDITOR_RESIZABLE=1>
         PLUGIN_DEV_MODE=${PLUGIN_DEV_MODE_VALUE}
 )
+
 
 # Link JUCE modules
 target_link_libraries(${PLUGIN_NAME}

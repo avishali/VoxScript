@@ -133,7 +133,8 @@ void WhisperEngine::run()
         DBG ("WhisperEngine: Extracting audio from source...");
         notifyProgress (0.0f); // Signal start
         
-        currentAudioFile = audioExtractor.extractToTempWAV (currentAudioSource);
+        currentAudioFile = AudioExtractor::extractToTempWAV (currentAudioSource);
+
         
         if (!currentAudioFile.existsAsFile())
         {
@@ -203,7 +204,8 @@ void WhisperEngine::loadModel()
     DBG ("WhisperEngine: Model file found: " + modelFile.getFullPathName());
     
     // Load model using whisper.cpp API
-    ctx = whisper_init_from_file (modelFile.getFullPathName().toRawUTF8());
+    whisper_context_params cparams = whisper_context_default_params();
+    ctx = whisper_init_from_file_with_params (modelFile.getFullPathName().toRawUTF8(), cparams);
     
     if (ctx == nullptr)
     {
@@ -315,7 +317,7 @@ void WhisperEngine::processAudio()
     // Notify start
     notifyProgress (0.0f);
     
-    // Configure whisper parameters
+    // Configure whisper parameters - AGGRESSIVE ANTI-HALLUCINATION MODE
     whisper_full_params params = whisper_full_default_params (WHISPER_SAMPLING_GREEDY);
     
     params.print_realtime   = false;
@@ -323,14 +325,41 @@ void WhisperEngine::processAudio()
     params.print_timestamps = true;
     params.print_special    = false;
     params.translate        = false;
-    params.language         = "en";
-    params.n_threads        = 4;  // Use 4 threads for processing
-    params.offset_ms        = 0;
-    params.duration_ms      = 0;  // Process entire file
     
-    // Enable word-level timestamps
-    params.max_len          = 1;  // FIXME: This might need tuning
+    // LANGUAGE SETTINGS
+    params.language         = "en";
+    params.detect_language  = false;  // Force English, don't auto-detect
+    
+    params.n_threads        = 4;
+    params.offset_ms        = 0;
+    params.duration_ms      = 0;
+    
+    // MAXIMUM ANTI-HALLUCINATION SETTINGS
+    params.suppress_blank   = true;
+    params.suppress_non_speech_tokens = true;
+    
+    // CRITICAL: Disable audio context completely
+    params.no_context       = true;
+    params.audio_ctx        = 0;  // Zero audio context (maximum anti-hallucination)
+    
+    // AGGRESSIVE: Reject hallucinated content
+    params.entropy_thold    = 2.0f;   // More aggressive (lower = more rejections)
+    params.logprob_thold    = -0.5f;  // Much more aggressive (higher = more rejections)
+    params.no_speech_thold  = 0.3f;   // Detect non-speech more aggressively
+    
+    // Word-level timestamps
+    params.max_len          = 0;
     params.token_timestamps = true;
+    params.split_on_word    = true;
+    
+    // Decoding parameters
+    params.beam_search.beam_size = 5;
+    params.greedy.best_of        = 5;
+    params.temperature      = 0.0f;  // Deterministic
+    params.temperature_inc  = 0.0f;  // Don't increase temp on failure
+    
+    // PROMPT ENGINEERING: Be extremely explicit
+    params.initial_prompt   = "[LYRICS] This is a vocal recording. Transcribe only the sung or spoken words. Ignore background music.";
     
     DBG ("WhisperEngine: Running whisper inference...");
     

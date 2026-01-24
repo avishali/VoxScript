@@ -1,0 +1,51 @@
+CRITICAL FIX FOR TASK 2.1:
+
+**2.1 Modify Source/ara/VoxScriptAudioSource.h**
+
+FIRST, add necessary includes at the TOP of the file (after existing includes):
+
+```cpp
+#include "../transcription/WhisperEngine.h"
+#include "../transcription/VoxSequence.h"
+```
+
+THEN add these members to the class:
+
+```cpp
+public:
+    // Phase III: Automatic transcription triggering
+    void notifyPropertiesUpdated() noexcept override;
+    
+    // Retrieve transcription results
+    const VoxSequence& getTranscription() const { return currentTranscription; }
+    bool isTranscriptionReady() const { return transcriptionReady; }
+    juce::String getTranscriptionStatus() const { return transcriptionStatus; }
+
+private:
+    // Phase III: Transcription trigger
+    void triggerTranscription();
+    
+    // WhisperEngine::Listener implementation
+    void transcriptionProgress(float progress) override;
+    void transcriptionComplete(VoxSequence sequence) override;
+    void transcriptionFailed(const juce::String& error) override;
+    
+    // Phase III: Transcription state
+    VoxSequence currentTranscription;
+    bool transcriptionReady = false;
+    juce::String transcriptionStatus = "Idle";
+    juce::File tempAudioFile; // For cleanup after transcription
+```
+
+**Important:** VoxScriptAudioSource must inherit from WhisperEngine::Listener
+Update the class declaration:
+
+```cpp
+class VoxScriptAudioSource : public juce::ARAAudioSource,
+                             public WhisperEngine::Listener  // ADD THIS
+{
+    // ...
+};
+```
+
+This fix addresses the issue that VoxScriptAudioSource needs the header includes to properly inherit from WhisperEngine::Listener.

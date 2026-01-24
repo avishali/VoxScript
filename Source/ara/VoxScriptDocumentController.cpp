@@ -11,6 +11,7 @@
 #include "VoxScriptDocumentController.h"
 #include "VoxScriptAudioSource.h"
 #include "VoxScriptPlaybackRenderer.h"
+#include "../util/VoxLogger.h"
 
 namespace VoxScript
 {
@@ -69,18 +70,9 @@ juce::ARAAudioModification* VoxScriptDocumentController::doCreateAudioModificati
 {
     DBG ("VOXSCRIPT: Creating Audio Modification for source: " + juce::String (audioSource->getName()));
     
-    // Store reference to current audio source for later cleanup
-    currentAudioSource = audioSource;
-    
-    // Enable sample access on the main thread (required by ARA SDK)
-    if (auto* docController = audioSource->getDocumentController())
-    {
-        docController->enableAudioSourceSamplesAccess (ARA::PlugIn::toRef (audioSource), true);
-    }
-    
-    // Trigger asynchronous transcription (extraction + inference)
-    transcriptionStatus = "Starting analysis...";
-    whisperEngine.transcribeAudioSource (audioSource);
+    // Phase III: Audio extraction is handled by VoxScriptAudioSource::notifyPropertiesUpdated()
+    // which is called automatically by ARA when the audio source properties are finalized.
+    // This ensures sample access is available before extraction begins.
     
     return new juce::ARAAudioModification (audioSource, hostRef, optionalModificationToClone);
 }
@@ -99,7 +91,52 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
     juce::ARAAudioModification* modification,
     ARA::ARAPlaybackRegionHostRef hostRef) noexcept
 {
-    DBG ("VoxScriptDocumentController::doCreatePlaybackRegion called");
+    VOXLOG("========================================");
+    VOXLOG("DOCUMENT CONTROLLER: Creating Playback Region");
+    VOXLOG("========================================");
+    
+    DBG ("========================================");
+    DBG ("VoxScriptDocumentController: Creating Playback Region");
+    DBG ("========================================");
+    
+    // Phase III: Trigger transcription when playback region is created
+    // (when audio is actually placed on the timeline)
+    
+    auto* audioSource = modification->getAudioSource();
+    if (audioSource)
+    {
+        VOXLOG("Audio Source: " + juce::String::toHexString((juce::pointer_sized_int)audioSource));
+        VOXLOG("Sample Access Enabled: " + juce::String(audioSource->isSampleAccessEnabled() ? "YES" : "NO"));
+        
+        DBG ("  Audio Source: " + juce::String::toHexString((juce::pointer_sized_int)audioSource));
+        DBG ("  Sample Access Enabled: " + juce::String(audioSource->isSampleAccessEnabled() ? "YES" : "NO"));
+        
+        auto* voxSource = dynamic_cast<VoxScriptAudioSource*>(audioSource);
+        if (voxSource && !voxSource->isTranscriptionReady() && audioSource->isSampleAccessEnabled())
+        {
+            VOXLOG("Transcription NOT ready yet - triggering transcription now");
+            VOXLOG("Passing controller pointer directly to avoid dynamic_cast issue");
+            DBG ("VoxScriptDocumentController: Triggering transcription for new playback region");
+            
+            // Trigger transcription (will start its own background thread internally)
+            voxSource->triggerTranscriptionWithController(this);
+        }
+        else if (voxSource && voxSource->isTranscriptionReady())
+        {
+            VOXLOG("Transcription already ready - skipping");
+        }
+        else if (!audioSource->isSampleAccessEnabled())
+        {
+            VOXLOG("Sample access NOT enabled - cannot transcribe yet");
+        }
+    }
+    else
+    {
+        VOXLOG("ERROR: No audio source in modification!");
+    }
+    
+    VOXLOG("========================================");
+    
     return new juce::ARAPlaybackRegion (modification, hostRef);
 }
 

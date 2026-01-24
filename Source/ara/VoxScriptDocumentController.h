@@ -152,6 +152,9 @@ public:
     /** Get the current transcription status message. */
     juce::String getTranscriptionStatus() const { return transcriptionStatus; }
 
+    /** Accessor for the WhisperEngine instance (Phase III) */
+    WhisperEngine& getWhisperEngine() { return whisperEngine; }
+
     private:
     //==========================================================================
     juce::ListenerList<Listener> listeners;

@@ -1,72 +1,529 @@
-MISSION ID: OPTIMIZE_PLAYBACK_ALLOC_V1
+MISSION ID: PHASE_III_FIX_CORRECT_API_001
+PARENT MISSION: PHASE_III_ARA_AUDIO_EXTRACTION_001
 
 ================================================================================
-BACKGROUND
+CONTEXT
 ================================================================================
-The previous mission (AUDIO_PASSTHROUGH_FIX) successfully implemented audio
-passthrough logic but failed the Real-Time Safety audit because it allocated
-a `juce::AudioBuffer` inside `processBlock()`.
+Phase III fix mission FAILED due to compilation error.
 
-We must move this allocation to `prepareToPlay()` to ensure the audio thread
-is allocation-free.
+**Root Cause:**
+Mission instructions incorrectly specified `override` keyword for `notifyPropertiesUpdated()`.
+
+**Compilation Error:**
+```
+error: only virtual member functions can be marked 'override'
+void notifyPropertiesUpdated() noexcept override;
+```
+
+**Why This Happened:**
+In JUCE 8.0+, `notifyPropertiesUpdated()` is NOT a virtual function in the base
+class `juce::ARAAudioSource`. Therefore it CANNOT be marked `override`.
+
+**What Was Hallucinated:**
+The previous mission specification incorrectly treated `notifyPropertiesUpdated()`
+as a virtual override, when it's actually a non-virtual callback method.
+
+**Correct Implementation Pattern:**
+```cpp
+// VoxScriptAudioSource.h
+class VoxScriptAudioSource : public juce::ARAAudioSource
+{
+public:
+    // NOT virtual, so NO override keyword
+    void notifyPropertiesUpdated() noexcept;
+    
+    // NOT virtual, so NO override keyword  
+    void notifyContentChanged (juce::ARAContentUpdateScopes scopeFlags) noexcept;
+};
+```
+
+This pattern is ALREADY CORRECT in the Phase I codebase (documented in 
+ARA_API_FIXES_NEEDED.md and Source/ara/VoxScriptAudioSource.h).
 
 ================================================================================
 OBJECTIVE
 ================================================================================
-Modify VoxScriptPlaybackRenderer to use a pre-allocated member buffer instead
-of creating a temporary buffer on the stack (which unknowingly allocates heap
-memory) every callback.
+**Fix the compilation error by removing `override` keyword and implementing the
+missing transcription trigger logic.**
+
+**Success Metric:**
+1. Build succeeds (no compilation errors)
+2. User drags audio → automatic transcription triggers
+3. Console shows full extraction + transcription flow
 
 ================================================================================
-SCOPE (STRICT)
+SCOPE (SURGICAL FIX)
 ================================================================================
-Allowed Files:
-- Source/ara/VoxScriptPlaybackRenderer.h
-- Source/ara/VoxScriptPlaybackRenderer.cpp
+
+Allowed Files (MODIFY ONLY):
+✓ Source/ara/VoxScriptAudioSource.h (fix override, add methods if missing)
+✓ Source/ara/VoxScriptAudioSource.cpp (implement trigger logic)
+
+Forbidden Files:
+✗ All other files (AudioExtractor works, WhisperEngine works, etc.)
 
 Forbidden Actions:
-- Do NOT change the logic of how audio is read (just where buffer comes from).
-- Do NOT add new features.
-- Do NOT change `processBlock` logic flow derived from `getPlaybackRegions`.
+✗ Do NOT modify AudioExtractor
+✗ Do NOT modify WhisperEngine
+✗ Do NOT add new files
+✗ Do NOT modify build configuration
 
 ================================================================================
-INSTRUCTIONS (IMPLEMENTER)
+IMPLEMENTATION INSTRUCTIONS (IMPLEMENTER)
 ================================================================================
 
-1. Modify `VoxScriptPlaybackRenderer.h`:
-   - Add a private member: `juce::AudioBuffer<float> tempBuffer;`
-   - Add comment: `// Pre-allocated buffer for RT processing`
+Multi-Agent Mode: ENABLED
+Your role: IMPLEMENTER
 
-2. Modify `VoxScriptPlaybackRenderer.cpp`:
-   - In `prepareToPlay()`:
-     - Call `tempBuffer.setSize(numChannels, maximumSamplesPerBlock);`
-     - This ensures memory is allocated BEFORE audio starts.
-   
-   - In `processBlock()`:
-     - REMOVE the line: `juce::AudioBuffer<float> tempBuffer(buffer.getNumChannels(), (int)overlapLength);`
-     - Instead, use the member `tempBuffer`.
-     - GUARD: Ensure `tempBuffer.getNumSamples()` is >= `overlapLength`.
-       - If not (should imply `maximumSamplesPerBlock` was lied about by host),
-         return true or strictly limit usage to prevent crash.
-         (Ideally, we trust `maximumSamplesPerBlock`, but safety check is good).
-     - IMPORTANT: The rest of the logic uses `tempBuffer.getWritePointer(ch)`.
-       This works fine with the member buffer (pointers are valid).
-     - Ensure you use `overlapLength` for the `readAudioSamples` count, not `tempBuffer.getNumSamples()`.
+────────────────────────────────────────────────────────────────────────────────
+TASK 1: Fix VoxScriptAudioSource.h Declaration
+────────────────────────────────────────────────────────────────────────────────
 
-3. Verify:
-   - No `new`, `malloc`, or `AudioBuffer` constructors in `processBlock`.
+**Open:** `Source/ara/VoxScriptAudioSource.h`
+
+**Ensure class inherits from WhisperEngine::Listener:**
+
+```cpp
+#include "../transcription/WhisperEngine.h"  // Add if missing
+
+class VoxScriptAudioSource : public juce::ARAAudioSource,
+                             public WhisperEngine::Listener  // Add if missing
+{
+public:
+    // Constructor
+    VoxScriptAudioSource (juce::ARADocument* document,
+                         ARA::ARAAudioSourceHostRef hostRef);
+    
+    ~VoxScriptAudioSource() override;
+    
+    //==========================================================================
+    // ARA callbacks - NOT virtual, so NO override keyword
+    
+    void notifyPropertiesUpdated() noexcept;  // NO override!
+    void notifyContentChanged (juce::ARAContentUpdateScopes scopeFlags) noexcept;  // NO override!
+    
+    //==========================================================================
+    // WhisperEngine::Listener interface - these ARE virtual
+    
+    void transcriptionProgress(float progress) override;
+    void transcriptionComplete(VoxSequence sequence) override;
+    void transcriptionFailed(const juce::String& error) override;
+    
+    //==========================================================================
+    // Public API for Phase III
+    
+    const VoxSequence& getTranscription() const { return currentTranscription; }
+    bool isTranscriptionReady() const { return transcriptionReady; }
+    juce::String getTranscriptionStatus() const { return transcriptionStatus; }
+    
+private:
+    // Phase III: Transcription trigger
+    void triggerTranscription();
+    
+    // Phase III: Transcription state
+    VoxSequence currentTranscription;
+    bool transcriptionReady = false;
+    juce::String transcriptionStatus = "Idle";
+    juce::File tempAudioFile;
+    
+    // Store pointer to controller for WhisperEngine access
+    VoxScriptDocumentController* ownerController = nullptr;
+};
+```
+
+**CRITICAL:**
+- `notifyPropertiesUpdated()` has NO `override` keyword
+- `notifyContentChanged()` has NO `override` keyword
+- WhisperEngine::Listener callbacks DO have `override` (they are virtual)
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 2: Implement VoxScriptAudioSource.cpp Logic
+────────────────────────────────────────────────────────────────────────────────
+
+**Open:** `Source/ara/VoxScriptAudioSource.cpp`
+
+**Add includes at top:**
+
+```cpp
+#include "VoxScriptAudioSource.h"
+#include "VoxScriptDocumentController.h"
+#include "../transcription/AudioExtractor.h"
+#include "../transcription/WhisperEngine.h"
+```
+
+**Update constructor to store controller pointer:**
+
+```cpp
+VoxScriptAudioSource::VoxScriptAudioSource (juce::ARADocument* document,
+                                           ARA::ARAAudioSourceHostRef hostRef)
+    : juce::ARAAudioSource (document, hostRef)
+{
+    DBG ("VoxScriptAudioSource: Created");
+    
+    // Store controller pointer for WhisperEngine access
+    ownerController = dynamic_cast<VoxScriptDocumentController*>(
+        getDocumentController()
+    );
+    
+    if (ownerController == nullptr)
+    {
+        DBG ("VoxScriptAudioSource ERROR: Could not get DocumentController!");
+    }
+}
+```
+
+**Implement notifyPropertiesUpdated() - NO override keyword:**
+
+```cpp
+void VoxScriptAudioSource::notifyPropertiesUpdated() noexcept
+{
+    DBG ("VoxScriptAudioSource: Properties updated");
+    DBG ("  Sample Rate: " + juce::String(getSampleRate()) + " Hz");
+    DBG ("  Channels: " + juce::String(getChannelCount()));
+    DBG ("  Duration: " + juce::String(getDurationInSeconds()) + " seconds");
+    
+    // Check if sample access is available
+    if (!isSampleAccessEnabled())
+    {
+        DBG ("VoxScriptAudioSource: Sample access not available yet");
+        transcriptionStatus = "Sample access unavailable";
+        return;
+    }
+    
+    DBG ("VoxScriptAudioSource: Sample access enabled, triggering transcription");
+    
+    // Trigger transcription on background thread
+    transcriptionStatus = "Starting extraction...";
+    juce::Thread::launch([this]() {
+        triggerTranscription();
+    });
+}
+```
+
+**Implement triggerTranscription():**
+
+```cpp
+void VoxScriptAudioSource::triggerTranscription()
+{
+    DBG ("VoxScriptAudioSource: Triggering transcription");
+    
+    // Extract audio to temp WAV
+    transcriptionStatus = "Extracting audio...";
+    tempAudioFile = AudioExtractor::extractToTempWAV(this, "voxscript_");
+    
+    if (!tempAudioFile.existsAsFile())
+    {
+        DBG ("VoxScriptAudioSource: Audio extraction failed");
+        transcriptionStatus = "Extraction failed";
+        return;
+    }
+    
+    DBG ("VoxScriptAudioSource: Extraction complete: " + tempAudioFile.getFullPathName());
+    DBG ("  File size: " + juce::String(tempAudioFile.getSize() / 1024) + " KB");
+    
+    // Get WhisperEngine from DocumentController
+    if (ownerController == nullptr)
+    {
+        DBG ("VoxScriptAudioSource: No DocumentController available");
+        transcriptionStatus = "Internal error";
+        if (tempAudioFile.existsAsFile())
+            tempAudioFile.deleteFile();
+        return;
+    }
+    
+    // Register as listener
+    ownerController->getWhisperEngine().addListener(this);
+    
+    // Start transcription
+    transcriptionStatus = "Starting transcription...";
+    ownerController->getWhisperEngine().transcribeAudioFile(tempAudioFile);
+}
+```
+
+**Implement WhisperEngine::Listener callbacks:**
+
+```cpp
+void VoxScriptAudioSource::transcriptionProgress(float progress)
+{
+    int percentage = juce::roundToInt(progress * 100.0f);
+    transcriptionStatus = "Transcribing: " + juce::String(percentage) + "%";
+    DBG ("VoxScriptAudioSource: Transcription progress: " + juce::String(percentage) + "%");
+}
+
+void VoxScriptAudioSource::transcriptionComplete(VoxSequence sequence)
+{
+    DBG ("VoxScriptAudioSource: Transcription complete!");
+    DBG ("  Segments: " + juce::String(sequence.segments.size()));
+    
+    currentTranscription = sequence;
+    transcriptionReady = true;
+    transcriptionStatus = "Ready";
+    
+    // Clean up temp file
+    if (tempAudioFile.existsAsFile())
+    {
+        DBG ("VoxScriptAudioSource: Deleting temp file: " + tempAudioFile.getFullPathName());
+        tempAudioFile.deleteFile();
+    }
+    
+    // Remove listener
+    if (ownerController != nullptr)
+    {
+        ownerController->getWhisperEngine().removeListener(this);
+    }
+}
+
+void VoxScriptAudioSource::transcriptionFailed(const juce::String& error)
+{
+    DBG ("VoxScriptAudioSource: Transcription failed: " + error);
+    transcriptionStatus = "Failed: " + error;
+    
+    // Clean up temp file
+    if (tempAudioFile.existsAsFile())
+    {
+        DBG ("VoxScriptAudioSource: Deleting temp file after failure");
+        tempAudioFile.deleteFile();
+    }
+    
+    // Remove listener
+    if (ownerController != nullptr)
+    {
+        ownerController->getWhisperEngine().removeListener(this);
+    }
+}
+```
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 3: Write IMPLEMENTER_RESULT.md
+────────────────────────────────────────────────────────────────────────────────
+
+```markdown
+# IMPLEMENTER RESULT - PHASE_III_FIX_CORRECT_API_001
+
+**Date:** [current date]
+**Implementer:** [agent name]
+**Mission ID:** PHASE_III_FIX_CORRECT_API_001
+
+## Implementation Summary
+
+Fixed compilation error by removing incorrect `override` keywords from 
+non-virtual ARA callback methods. Implemented auto-transcription trigger logic.
+
+## Files Modified (2)
+- Source/ara/VoxScriptAudioSource.h (fixed override, added WhisperEngine::Listener)
+- Source/ara/VoxScriptAudioSource.cpp (implemented all trigger logic)
+
+## Key Changes
+
+1. **Removed `override` keywords:**
+   - notifyPropertiesUpdated() - NOT virtual, no override
+   - notifyContentChanged() - NOT virtual, no override
+
+2. **Added WhisperEngine::Listener inheritance:**
+   - transcriptionProgress() - virtual, HAS override
+   - transcriptionComplete() - virtual, HAS override
+   - transcriptionFailed() - virtual, HAS override
+
+3. **Implemented trigger logic:**
+   - notifyPropertiesUpdated() checks sample access, launches background thread
+   - triggerTranscription() calls AudioExtractor, starts WhisperEngine
+   - All callbacks handle cleanup properly
+
+## STOP
+
+Implementation complete. Passing to VERIFIER.
+```
+
+**Then STOP. Do NOT build or test.**
 
 ================================================================================
-INSTRUCTIONS (VERIFIER)
+VERIFICATION INSTRUCTIONS (VERIFIER)
 ================================================================================
-1. Audit `VoxScriptPlaybackRenderer.cpp`:
-   - Search for `juce::AudioBuffer` inside `processBlock`.
-   - Ensure `tempBuffer.setSize` ONLY happens in `prepareToPlay`..
-2. Build `cd build-Debug && ninja`.
-3. Verify RT Safety:
-   - No hidden allocations in the loop.
+
+Multi-Agent Mode: ENABLED
+Your role: VERIFIER
+
+────────────────────────────────────────────────────────────────────────────────
+VERIFICATION STEPS
+────────────────────────────────────────────────────────────────────────────────
+
+**STEP 1: Code Inspection**
+
+VoxScriptAudioSource.h:
+- [ ] notifyPropertiesUpdated() has NO `override` keyword
+- [ ] notifyContentChanged() has NO `override` keyword
+- [ ] Class inherits from WhisperEngine::Listener
+- [ ] transcriptionProgress() HAS `override` keyword
+- [ ] transcriptionComplete() HAS `override` keyword
+- [ ] transcriptionFailed() HAS `override` keyword
+
+VoxScriptAudioSource.cpp:
+- [ ] Includes AudioExtractor.h and WhisperEngine.h
+- [ ] Constructor stores ownerController pointer
+- [ ] notifyPropertiesUpdated() implemented (no override in cpp)
+- [ ] Checks isSampleAccessEnabled()
+- [ ] Launches background thread
+- [ ] triggerTranscription() implemented
+- [ ] Calls AudioExtractor::extractToTempWAV()
+- [ ] Gets WhisperEngine from ownerController
+- [ ] Registers as listener
+- [ ] Calls transcribeAudioFile()
+- [ ] All 3 Listener callbacks implemented
+- [ ] Temp file cleanup in all paths
+
+**STEP 2: Build**
+
+```bash
+cd /Users/avishaylidani/DEV/GitHubRepo/VoxScript/build-Debug
+ninja -v 2>&1 | tee build.log
+```
+
+**Expected:**
+- [ ] Build SUCCEEDS (exit code 0)
+- [ ] NO compilation errors
+- [ ] NO new warnings
+
+**If build fails, mission FAILS. Stop and write VERIFIER_RESULT.md.**
+
+**STEP 3: Runtime Test (CRITICAL)**
+
+1. Open Reaper
+2. Drag audio file to track
+3. Right-click waveform → Extensions → VoxScript
+4. Monitor console
+
+**Expected Console Output:**
+
+```
+VoxScriptAudioSource: Created
+VoxScriptAudioSource: Properties updated
+  Sample Rate: 44100 Hz
+  Channels: 1 (or 2)
+  Duration: X seconds
+VoxScriptAudioSource: Sample access enabled, triggering transcription
+VoxScriptAudioSource: Triggering transcription
+AudioExtractor: Starting extraction
+  Source: 44100 Hz, X ch, X samples
+  Target: 16000 Hz, 1 ch
+AudioExtractor: Extraction complete
+VoxScriptAudioSource: Extraction complete: /tmp/voxscript_XXX.wav
+  File size: X KB
+WhisperEngine: Starting transcription
+VoxScriptAudioSource: Transcription progress: 25%
+VoxScriptAudioSource: Transcription progress: 50%
+VoxScriptAudioSource: Transcription progress: 75%
+WhisperEngine: Transcription complete
+VoxScriptAudioSource: Transcription complete!
+  Segments: X
+VoxScriptAudioSource: Deleting temp file
+```
+
+- [ ] Transcription triggers automatically?
+- [ ] Progress updates appear?
+- [ ] Transcription completes?
+- [ ] Temp file deleted?
+- [ ] No crashes?
+
+**If Runtime Test fails, mission FAILS.**
+
+**STEP 4: Acceptance Criteria**
+
+**Build (5):**
+- [ ] [AC-1] Build succeeds
+- [ ] [AC-2] No compilation errors
+- [ ] [AC-3] No override errors
+- [ ] [AC-4] VoxScriptAudioSource compiles
+- [ ] [AC-5] No new warnings
+
+**API Correctness (10):**
+- [ ] [AC-6] notifyPropertiesUpdated() NO override
+- [ ] [AC-7] notifyContentChanged() NO override
+- [ ] [AC-8] WhisperEngine::Listener inheritance present
+- [ ] [AC-9] transcriptionProgress() HAS override
+- [ ] [AC-10] transcriptionComplete() HAS override
+- [ ] [AC-11] transcriptionFailed() HAS override
+- [ ] [AC-12] Constructor stores ownerController
+- [ ] [AC-13] Checks isSampleAccessEnabled()
+- [ ] [AC-14] Launches background thread
+- [ ] [AC-15] Temp file cleanup in all paths
+
+**Functionality (10):**
+- [ ] [AC-16] Plugin loads in Reaper
+- [ ] [AC-17] Audio triggers transcription ⭐ CRITICAL
+- [ ] [AC-18] Extraction completes
+- [ ] [AC-19] Transcription starts
+- [ ] [AC-20] Progress updates visible
+- [ ] [AC-21] Transcription completes
+- [ ] [AC-22] Temp file deleted
+- [ ] [AC-23] No crashes
+- [ ] [AC-24] Console output correct
+- [ ] [AC-25] Multiple files work
+
+**Scope Compliance (5):**
+- [ ] [AC-26] Only VoxScriptAudioSource.h/cpp modified
+- [ ] [AC-27] No forbidden files touched
+- [ ] [AC-28] No new files created
+- [ ] [AC-29] AudioExtractor unchanged
+- [ ] [AC-30] WhisperEngine unchanged
+
+**Total: 30 Acceptance Criteria**
+**Minimum to PASS: 27/30 (90%)**
+**Critical: AC-1, AC-2, AC-6, AC-7, AC-17 must ALL PASS**
+
+────────────────────────────────────────────────────────────────────────────────
+WRITE RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+Write VERIFIER_RESULT.md + LAST_RESULT.md
+
+**Then STOP.**
+
 ================================================================================
-STOP RULE
+SUCCESS CRITERIA
 ================================================================================
-Implementer: Write IMPLEMENTER_RESULT.md, then STOP.
-Verifier: Write VERIFIER_RESULT.md + LAST_RESULT.md, then STOP.
+
+Mission succeeds if:
+1. **Build:** 5/5 PASS (no compilation errors)
+2. **API Correctness:** 10/10 PASS (override keywords correct)
+3. **Functionality:** At least 8/10 PASS (AC-17 MUST PASS)
+4. **Scope:** 5/5 PASS
+
+**Minimum: 27/30 PASS (90%)**
+
+**Critical Test:** Runtime Test 1 (automatic transcription) MUST PASS.
+
+================================================================================
+NOTES FOR ARCHITECT
+================================================================================
+
+**What Was Wrong:**
+Previous mission hallucinated that `notifyPropertiesUpdated()` was virtual.
+It's not. In JUCE 8.0+, ARA callback methods are non-virtual.
+
+**Correct Pattern (from Phase I codebase):**
+```cpp
+// .h file - NO override keyword
+void notifyPropertiesUpdated() noexcept;
+
+// .cpp file - NO override keyword
+void VoxScriptAudioSource::notifyPropertiesUpdated() noexcept
+{
+    // Implementation
+}
+```
+
+**This is documented in:**
+- `ARA_API_FIXES_NEEDED.md`
+- `Source/ara/VoxScriptAudioSource.h` (Phase I)
+
+**Lesson:** Always check existing codebase patterns before writing missions.
+
+================================================================================
+END OF MISSION
+================================================================================
+
+Mission ID: PHASE_III_FIX_CORRECT_API_001
+Parent: PHASE_III_ARA_AUDIO_EXTRACTION_001
+Version: 1.0
+Date: 2026-01-22
+Status: READY FOR EXECUTION

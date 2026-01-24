@@ -1,101 +1,52 @@
-/*
-  ==============================================================================
-    VoxSequence.h
-    
-    Data structure for transcription results from Whisper
-    Stores segments, words, and timing information
-    
-    Part of VoxScript Phase II: Transcription Engine
-    
-    Copyright (c) 2025 MelechDSP - All rights reserved.
-  ==============================================================================
-*/
-
 #pragma once
-
-#include <juce_core/juce_core.h>
+#include <JuceHeader.h>
 
 namespace VoxScript
 {
 
-/**
- * @brief Represents a single word with timing and confidence
- */
-struct VoxWord
-{
+// Restored VoxWord for compatibility with WhisperEngine
+struct VoxWord {
+    double startTime = 0.0;
+    double endTime = 0.0;
     juce::String text;
-    double startTime;   // seconds
-    double endTime;     // seconds
-    float confidence;   // 0.0 to 1.0
+    float confidence = 0.0f;
 };
 
-/**
- * @brief Represents a segment of transcribed text (usually a phrase or sentence)
- * 
- * Whisper outputs text in segments, each containing multiple words.
- * Segments are naturally delimited by pauses or speaker changes.
- */
 struct VoxSegment
 {
+    double startTime = 0.0;
+    double endTime = 0.0;
     juce::String text;
-    double startTime;
-    double endTime;
     juce::Array<VoxWord> words;
 };
 
-/**
- * @brief Complete transcription sequence for an audio source
- * 
- * This is the primary data structure for storing transcription results.
- * It's designed to be:
- * - Value-type (copyable, can be passed by value)
- * - Thread-safe (immutable once created)
- * - Serializable (Phase III: will add XML/binary serialization)
- * 
- * Phase II: Basic storage and retrieval
- * Phase III: Add edit tracking, undo/redo, serialization
- */
 class VoxSequence
 {
 public:
     VoxSequence() = default;
     
-    /**
-     * Add a segment to the sequence
-     * Segments should be added in chronological order
-     */
-    void addSegment (const VoxSegment& segment);
-    
-    /**
-     * Clear all segments
-     */
+    // Existing API (implemented in VoxSequence.cpp)
+    const juce::Array<VoxSegment>& getSegments() const;
+    void addSegment(const VoxSegment& segment);
     void clear();
     
-    /**
-     * Get all segments
-     */
-    const juce::Array<VoxSegment>& getSegments() const;
-    
-    /**
-     * Get the full text of the transcription
-     * Concatenates all segment text with spaces
-     */
+    // Restored methods (implemented in VoxSequence.cpp)
     juce::String getFullText() const;
-    
-    /**
-     * Get total word count across all segments
-     */
     int getWordCount() const;
-    
-    /**
-     * Get total duration of the transcription in seconds
-     */
     double getTotalDuration() const;
+
+    // User's requested helper (adapted to use correct fields)
+    void addSegment(double start, double end, const juce::String& text)
+    {
+        VoxSegment s;
+        s.startTime = start;
+        s.endTime = end;
+        s.text = text;
+        addSegment(s);
+    }
 
 private:
     juce::Array<VoxSegment> segments;
-    
-    JUCE_LEAK_DETECTOR (VoxSequence)
 };
 
 } // namespace VoxScript

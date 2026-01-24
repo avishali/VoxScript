@@ -3,8 +3,8 @@
     ScriptView.cpp
     
     Implementation of Script View
-    Phase II: Updated to display VoxSequence transcription data
-    Phase III: Added timer-based status polling
+    Phase II: Updated to display VoxSequence transcription data with timestamps
+    Phase III: Added timer-based status polling and scrollable viewport
   ==============================================================================
 */
 
@@ -18,7 +18,11 @@ ScriptView::ScriptView()
 {
     // Initialize with placeholder text
     statusText = "Ready - Awaiting audio source";
-    displayText = "";
+    
+    // Set up viewport
+    addAndMakeVisible(viewport);
+    viewport.setViewedComponent(&transcriptionDisplay, false);
+    viewport.setScrollBarsShown(true, false); // Vertical scrollbar only
     
     // Start timer for status polling (Phase III temporary solution)
     startTimer(100); // Poll every 100ms
@@ -43,37 +47,27 @@ void ScriptView::paint (juce::Graphics& g)
     // Draw status in top-left
     g.setColour (juce::Colours::grey);
     g.setFont (juce::FontOptions (12.0f));
-    g.drawText (statusText, 10, 10, 300, 20, juce::Justification::left);
+    g.drawText (statusText, 10, 10, getWidth() - 20, 20, juce::Justification::left);
     
-    // Draw transcription text
-    if (displayText.isNotEmpty())
+    // Draw placeholder if no transcription
+    if (currentSequence.getSegments().isEmpty())
     {
-        g.setColour (juce::Colours::black);
-        g.setFont (juce::FontOptions (14.0f));
-        
-        auto textArea = getLocalBounds().reduced (20).withTrimmedTop (40);
-        
-        // Simple multi-line text drawing
-        g.drawMultiLineText (displayText, 
-                            textArea.getX(), 
-                            textArea.getY() + 20,
-                            textArea.getWidth());
-    }
-    else
-    {
-        // Show placeholder text when no transcription
         g.setColour (juce::Colours::lightgrey);
         g.setFont (juce::FontOptions (14.0f));
         g.drawText ("Ready - Awaiting audio source", 
-                    getLocalBounds(), 
+                    getLocalBounds().withTrimmedTop(40), 
                     juce::Justification::centred);
     }
 }
 
 void ScriptView::resized()
 {
-    // No child components to layout in Phase II
-    // Phase III will add TextEditor component
+    // Position viewport below status bar
+    viewport.setBounds(getLocalBounds().withTrimmedTop(40));
+    
+    // Update transcription display width
+    transcriptionDisplay.setSize(viewport.getWidth() - viewport.getScrollBarThickness(), 
+                                  transcriptionDisplay.getHeight());
 }
 
 //==============================================================================
@@ -81,8 +75,11 @@ void ScriptView::resized()
 
 void ScriptView::setTranscription (const VoxSequence& sequence)
 {
-    displayText = sequence.getFullText();
-    DBG ("ScriptView: Received transcription text: " + displayText);
+    currentSequence = sequence;
+    transcriptionDisplay.setSequence(sequence);
+    
+    DBG ("ScriptView: Received transcription with " + juce::String(sequence.getSegments().size()) + " segments");
+    
     repaint();
 }
 
@@ -94,7 +91,8 @@ void ScriptView::setStatus (const juce::String& status)
 
 void ScriptView::clear()
 {
-    displayText = "";
+    currentSequence.clear();
+    transcriptionDisplay.setSequence(currentSequence);
     statusText = "Ready - Awaiting audio source";
     repaint();
 }
@@ -120,9 +118,9 @@ void ScriptView::timerCallback()
     
     // Check if transcription updated
     auto& transcription = documentController->getTranscription();
-    auto newText = transcription.getFullText();
     
-    if (newStatus == "Ready" && !newText.isEmpty() && newText != displayText)
+    if (newStatus == "Ready" && !transcription.getSegments().isEmpty() 
+        && transcription.getSegments().size() != currentSequence.getSegments().size())
     {
         setTranscription(transcription);
     }

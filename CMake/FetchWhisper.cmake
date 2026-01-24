@@ -23,6 +23,9 @@ FetchContent_Declare(
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "Build whisper tests" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "Build whisper examples" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "Build whisper server" FORCE)
+# Android examples are in 'examples/whisper.android' and are excluded
+# because WHISPER_BUILD_EXAMPLES is OFF.
+# Java bindings are not built by default in the main CMakeLists.txt.
 
 # Enable Metal acceleration on macOS (optional, but recommended)
 if(APPLE)

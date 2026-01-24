@@ -1,0 +1,29 @@
+VoxScript/
+├── CMakeLists.txt
+├── README.md
+├── Source/
+│   ├── PluginEditor.cpp
+│   ├── PluginEditor.h
+│   ├── PluginProcessor.cpp
+│   ├── PluginProcessor.h
+│   ├── ara/
+│   │   ├── VoxScriptAudioSource.cpp
+│   │   ├── VoxScriptAudioSource.h
+│   │   ├── VoxScriptDocumentController.cpp
+│   │   ├── VoxScriptDocumentController.h
+│   │   ├── VoxScriptPlaybackRenderer.cpp
+│   │   └── VoxScriptPlaybackRenderer.h
+│   ├── transcription/
+│   │   ├── AudioExtractor.cpp
+│   │   ├── AudioExtractor.h
+│   │   ├── VoxSequence.cpp
+│   │   ├── VoxSequence.h
+│   │   ├── WhisperEngine.cpp
+│   │   └── WhisperEngine.h
+│   ├── ui/
+│   │   ├── DetailView.cpp
+│   │   ├── DetailView.h
+│   │   ├── ScriptView.cpp
+│   │   └── ScriptView.h
+│   └── util/
+│       └── VoxLogger.h

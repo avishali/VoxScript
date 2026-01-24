@@ -114,7 +114,8 @@ private:
     juce::ListenerList<Listener> listeners;
     juce::ARAAudioSource* currentAudioSource = nullptr;
     juce::File currentAudioFile;
-    AudioExtractor audioExtractor;
+    // AudioExtractor is static, removed member instance
+
     std::atomic<bool> shouldCancel {false};
     
     // Opaque pointer to whisper_context (forward declared above)

@@ -20,6 +20,7 @@ VoxScriptAudioProcessor::VoxScriptAudioProcessor()
                      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    std::cerr << "[VoxScript] VoxScriptAudioProcessor constructor starting..." << std::endl;
     // Try to initialize file logger with multiple fallback locations
     juce::File logDir;
     
@@ -208,7 +209,25 @@ VoxScriptDocumentController* VoxScriptAudioProcessor::getVoxScriptDocumentContro
 
 const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
 {
-    return juce::ARADocumentControllerSpecialisation::createARAFactory<VoxScript::VoxScriptDocumentController>();
+    // Log to stderr for early crash debugging
+    std::cerr << "[VoxScript] createARAFactory() called" << std::endl;
+    
+    try
+    {
+        auto* factory = juce::ARADocumentControllerSpecialisation::createARAFactory<VoxScript::VoxScriptDocumentController>();
+        std::cerr << "[VoxScript] ARA Factory created successfully: " << (void*)factory << std::endl;
+        return factory;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[VoxScript] EXCEPTION in createARAFactory: " << e.what() << std::endl;
+        return nullptr;
+    }
+    catch (...)
+    {
+        std::cerr << "[VoxScript] UNKNOWN EXCEPTION in createARAFactory" << std::endl;
+        return nullptr;
+    }
 }
 
 //==============================================================================
@@ -216,5 +235,23 @@ const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new VoxScript::VoxScriptAudioProcessor();
+    // Log to stderr for early crash debugging
+    std::cerr << "[VoxScript] createPluginFilter() called" << std::endl;
+    
+    try
+    {
+        auto* processor = new VoxScript::VoxScriptAudioProcessor();
+        std::cerr << "[VoxScript] Audio Processor created successfully: " << (void*)processor << std::endl;
+        return processor;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[VoxScript] EXCEPTION in createPluginFilter: " << e.what() << std::endl;
+        return nullptr;
+    }
+    catch (...)
+    {
+    std::cerr << "[VoxScript] UNKNOWN EXCEPTION in createPluginFilter" << std::endl;
+        return nullptr;
+    }
 }

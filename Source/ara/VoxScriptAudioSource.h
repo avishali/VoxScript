@@ -1,89 +1,85 @@
-/*
-  ==============================================================================
-    VoxScriptAudioSource.h
-    
-    Custom ARA Audio Source - represents raw audio files
-    This is where transcription will be triggered in Phase II
-    Fixed for JUCE 8.0+ ARA API
-  ==============================================================================
-*/
-
 #pragma once
 
-#include <juce_audio_processors/juce_audio_processors.h>
+#include <JuceHeader.h>
+
+// --- FIX: ADDED INCLUDES ---
+#include "../transcription/WhisperEngine.h"
+#include "../transcription/VoxSequence.h"
 
 namespace VoxScript
 {
 
-/**
- * @brief Custom ARA Audio Source for VoxScript
- * 
- * Represents the raw audio file on disk. This object is treated as immutable.
- * 
- * From PDF Section 3.1.2: "ARAAudioSource: This object represents the raw audio 
- * file on the user's hard drive. It provides access to the sample data. VoxScript 
- * treats this as immutable. We analyze this source to generate the transcription."
- * 
- * In Phase II, this is where we'll:
- * - Spawn background thread for VAD + STT
- * - Store the VoxSequence (transcription + timing data)
- * - Provide access to transcription for the UI
- */
-class VoxScriptAudioSource : public juce::ARAAudioSource
+// Forward declaration to avoid circular dependency
+class VoxScriptDocumentController;
+
+// --- FIX: INHERIT FROM juce::ARAAudioSource ---
+class VoxScriptAudioSource : public juce::ARAAudioSource,
+                             public WhisperEngine::Listener
 {
 public:
-    //==========================================================================
-    VoxScriptAudioSource (juce::ARADocument* document,
-                         ARA::ARAAudioSourceHostRef hostRef);
+    // Constructor
+    VoxScriptAudioSource(juce::ARADocument* document, ARA::ARAAudioSourceHostRef hostRef);
     
     ~VoxScriptAudioSource() override;
-    
-    //==========================================================================
-    // ARA Audio Source notifications
-    
-    /**
-     * Called when the audio source properties are updated by the host
-     * Note: Not virtual in JUCE 8, so no override keyword
-     */
+
+    // ARA override - called when audio source properties are finalized
+    // NOT virtual in JUCE 8+, so NO override keyword
     void notifyPropertiesUpdated() noexcept;
     
-    /**
-     * Called when the audio source content (samples) is modified
-     * This triggers re-analysis
-     * Note: Not virtual in JUCE 8, so no override keyword
-     */
-    void notifyContentChanged (juce::ARAContentUpdateScopes scopeFlags) noexcept;
+    // Phase III: Trigger transcription with controller (called from DocumentController)
+    void triggerTranscriptionWithController(VoxScriptDocumentController* controller);
     
-    //==========================================================================
-    // Phase II: Transcription API (placeholder for now)
+    // WhisperEngine::Listener overrides
+    void transcriptionProgress(float progress) override;
+    void transcriptionComplete(VoxSequence sequence) override;
+    void transcriptionFailed(const juce::String& error) override;
     
-    /**
-     * Get the transcribed text for this audio source
-     * Returns empty string in Phase I
-     */
-    juce::String getTranscription() const;
+    const VoxSequence& getTranscription() const { return currentTranscription; }
+    bool isTranscriptionReady() const { return transcriptionReady; }
+    juce::String getTranscriptionStatus() const { return transcriptionStatus; }
+
+private:
+    // NOTE: We get DocumentController when needed (in triggerTranscription)
+    // instead of storing it, since it's not available in constructor
     
-    /**
-     * Check if transcription is complete
-     * Returns false in Phase I
-     */
-    bool isTranscriptionReady() const;
+    // Phase III: Transcription triggering
+    void triggerTranscription();
     
-    /**
-     * Get transcription progress (0.0 to 1.0)
-     * Returns 0.0 in Phase I
-     */
-    float getTranscriptionProgress() const;
+    // Phase III: Background transcription thread
+    class TranscriptionThread : public juce::Thread
+    {
+    public:
+        TranscriptionThread(VoxScriptAudioSource* source, VoxScriptDocumentController* controller)
+            : juce::Thread("VoxScript Transcription"),
+              audioSource(source),
+              docController(controller)
+        {
+        }
+        
+        void run() override
+        {
+            if (audioSource && docController)
+            {
+                audioSource->runTranscriptionOnBackgroundThread(docController);
+            }
+        }
+        
+    private:
+        VoxScriptAudioSource* audioSource;
+        VoxScriptDocumentController* docController;
+    };
     
-    //==========================================================================
-    // Phase I: Placeholder for future transcription data
-    // Phase II: Will add VoxSequence member, analysis thread, etc.
+    friend class TranscriptionThread;
+    void runTranscriptionOnBackgroundThread(VoxScriptDocumentController* docController);
     
-    bool transcriptionReady { false };
-    float transcriptionProgress { 0.0f };
-    juce::String transcriptionText;
+    std::unique_ptr<TranscriptionThread> transcriptionThread;
     
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptAudioSource)
+    // Phase III: Transcription state
+    VoxSequence currentTranscription;
+    bool transcriptionReady = false;
+    bool transcriptionInProgress = false;  // Track if transcription is running
+    juce::String transcriptionStatus = "Idle";
+    juce::File tempAudioFile;
 };
 
 } // namespace VoxScript
