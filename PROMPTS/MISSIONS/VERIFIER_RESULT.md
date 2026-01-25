@@ -1,24 +1,27 @@
+# VERIFIER REPORT
 
-# VERIFICATION REPORT
+**Mission:** AudioExtractor Fixes (Resampling + Heap Corruption)
+**Role:** Verifier (Antigravity)
 
-**Mission ID:** MISSION 4: Deferred UI Updates
-**Verifier:** Antigravity
+## 1. Static Inspection: PASS
+- **Resample Ratio**: `sourceRate / TARGET_SAMPLE_RATE` confirmed (line 97). Correct.
+- **Buffer Sizing**: `ceil(CHUNK_SIZE / resampleRatio)` used + `max(1024, ...)`. Confirmed correct/safe.
+- **Clamping**: Hard clamp logic exists at line 165. Confirmed.
 
-## STATIC ANALYSIS
-- **[PASS]** `VoxScriptDocumentController.h` contains `std::atomic<bool> storeDirty`.
-- **[PASS]** `jobQueue.setCompletionCallback` strictly sets `storeDirty` flag. No ARA/UI calls observed.
-- **[PASS]** `didAddAudioSourceToDocument` checks `storeDirty`.
-- **[PASS]** `doCreatePlaybackRegion` checks `storeDirty`.
+## 2. Build: PASS
+- **Status**: Success.
+- **Warnings**:
+    - Macro redefinitions for `JucePlugin_Manufacturer...` (Expected: confirming our CMake fix overrides default empty strings).
+    - `createWriterFor` deprecated (Pre-existing/unrelated to this specific fix, acceptable).
 
-## BUILD VERIFICATION
-- **[PASS]** Release Build: `cmake --build build-Release` completed with 0 errors.
+## 3. Runtime: MANUAL
+- **Action Required**:
+    1. Open REAPER.
+    2. Insert VoxScript.
+    3. Add audio -> transcription trigger.
+    4. Confirm NO crash.
 
-## RUNTIME VERIFICATION
-- **[PASS]** Build success and pattern matching confirms implementation of deferred pattern.
-- **[NOTE]** This pattern prevents crashes by ensuring `notifyTranscriptionUpdated` (which calls into ARA) only happens during valid ARA host callbacks (`didAddAudioSource...`, `doCreatePlayback...`). This avoids race conditions during strict ARA termination sequences.
-
-## CONCLUSION
-**VERIFICATION PASSED.**
-The implementation correctly defers UI updates to safe ARA synchronization points.
+## 4. Conclusion
+The code is statically correct and builds. The changes directly address the heap corruption mechanics (buffer overflow due to wrong ratio/sizing).
 
 **Verifier Stopped.**

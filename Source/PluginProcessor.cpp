@@ -21,8 +21,17 @@ VoxScriptAudioProcessor::VoxScriptAudioProcessor()
                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
     std::cerr << "[VoxScript] VoxScriptAudioProcessor constructor starting..." << std::endl;
-    // Try to initialize file logger with multiple fallback locations
-    juce::File logDir;
+
+    // Check for disable logging env var
+    const char* noLogEnv = std::getenv("VOXSCRIPT_NO_LOGGING");
+    if (noLogEnv != nullptr && juce::String(noLogEnv) == "1")
+    {
+        std::cerr << "[VoxScript] Logging disabled via VOXSCRIPT_NO_LOGGING=1" << std::endl;
+    }
+    else
+    {
+        // Try to initialize file logger with multiple fallback locations
+        juce::File logDir;
     
     // Try location 1: ~/Library/Logs/VoxScript (macOS standard)
     logDir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
@@ -77,6 +86,7 @@ VoxScriptAudioProcessor::VoxScriptAudioProcessor()
     juce::Logger::writeToLog ("================================================");
     juce::Logger::writeToLog ("ARA Mode: " + juce::String (isBoundToARA() ? "ACTIVE (ARA2)" : "Standalone"));
     juce::Logger::writeToLog ("================================================");
+    }
 }
 
 VoxScriptAudioProcessor::~VoxScriptAudioProcessor()
@@ -203,6 +213,8 @@ VoxScriptDocumentController* VoxScriptAudioProcessor::getVoxScriptDocumentContro
 
 } // namespace VoxScript
 
+#include <mutex>
+
 //==============================================================================
 // ARA Factory (required for ARA2 support)
 // This tells JUCE which Document Controller class to instantiate
@@ -212,22 +224,29 @@ const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
     // Log to stderr for early crash debugging
     std::cerr << "[VoxScript] createARAFactory() called" << std::endl;
     
-    try
+    static const ARA::ARAFactory* factory = nullptr;
+    static std::once_flag flag;
+    
+    std::call_once (flag, []
     {
-        auto* factory = juce::ARADocumentControllerSpecialisation::createARAFactory<VoxScript::VoxScriptDocumentController>();
-        std::cerr << "[VoxScript] ARA Factory created successfully: " << (void*)factory << std::endl;
-        return factory;
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "[VoxScript] EXCEPTION in createARAFactory: " << e.what() << std::endl;
-        return nullptr;
-    }
-    catch (...)
-    {
-        std::cerr << "[VoxScript] UNKNOWN EXCEPTION in createARAFactory" << std::endl;
-        return nullptr;
-    }
+        try
+        {
+            factory = juce::ARADocumentControllerSpecialisation::createARAFactory<VoxScript::VoxScriptDocumentController>();
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "[VoxScript] EXCEPTION in createARAFactory init: " << e.what() << std::endl;
+            factory = nullptr;
+        }
+        catch (...)
+        {
+            std::cerr << "[VoxScript] UNKNOWN EXCEPTION in createARAFactory init" << std::endl;
+            factory = nullptr;
+        }
+    });
+
+    std::cerr << "[VoxScript] ARA Factory pointer: " << (void*)factory << std::endl;
+    return factory;
 }
 
 //==============================================================================

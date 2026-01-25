@@ -147,6 +147,7 @@ VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
     if (shouldCancel) return {}; 
     
     // Configure whisper parameters
+    // Change 1: Revert to Greedy (Mission 5 fix caused crash with Beam)
     whisper_full_params params = whisper_full_default_params (WHISPER_SAMPLING_GREEDY);
     
     params.print_realtime   = false;
@@ -160,22 +161,30 @@ VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
     params.offset_ms        = 0;
     params.duration_ms      = 0;
     
-    // Anti-Hallucination settings (preserved from original)
+    // Anti-Hallucination settings (Updated for Mission 5, Kept for Mission 5.1)
     params.suppress_blank   = true;
     params.suppress_non_speech_tokens = true;
     params.no_context       = true;
     params.audio_ctx        = 0; 
     params.entropy_thold    = 2.0f;
-    params.logprob_thold    = -0.5f;
-    params.no_speech_thold  = 0.3f;
+
+    // Change 4: Stricter gating (Kept)
+    params.logprob_thold    = -1.0f; // More conservative (was -0.5f)
+    params.no_speech_thold  = 0.6f;  // Higher threshold for silence (was 0.3f)
+
     params.max_len          = 0;
     params.token_timestamps = true;
     params.split_on_word    = true;
-    params.beam_search.beam_size = 5;
-    params.greedy.best_of        = 5;
+    
+    // Change 2: Beam search settings (Reverted/Ignored for Greedy)
+    params.beam_search.beam_size = -1; // Default/Disabled
+    params.greedy.best_of        = 5; 
+    
     params.temperature      = 0.0f;
     params.temperature_inc  = 0.0f;
-    params.initial_prompt   = "[LYRICS] This is a vocal recording. Transcribe only the sung or spoken words. Ignore background music.";
+    
+    // Change 3: Neutral prompt (Kept)
+    params.initial_prompt   = "Transcribe the vocal words you can clearly hear. If unsure, output nothing.";
     
     DBG ("WhisperEngine: Running whisper inference...");
     
@@ -196,9 +205,18 @@ VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
     
     DBG ("WhisperEngine: Transcription complete, extracting results");
     
+    int numSegments = whisper_full_n_segments (ctx);
+
+    // Change 5: Post-run guard for empty/junk results
+    if (numSegments == 0)
+    {
+        DBG ("WhisperEngine: No segments found.");
+        return {};
+    }
+    
     // Extract results
     VoxSequence sequence;
-    int numSegments = whisper_full_n_segments (ctx);
+    juce::String combinedText;
     
     for (int i = 0; i < numSegments; ++i)
     {
@@ -210,6 +228,8 @@ VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
         
         VoxSegment segment;
         segment.text = juce::String::fromUTF8 (text);
+        combinedText += segment.text;
+
         segment.startTime = static_cast<double> (t0) / 100.0;
         segment.endTime = static_cast<double> (t1) / 100.0;
         
@@ -222,6 +242,14 @@ VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
         
         segment.words.add (word);
         sequence.addSegment (segment);
+    }
+    
+    // Change 5b: Check total text length to filter out noise/junk
+    // Using a minimal length check (e.g. < 2 chars)
+    if (combinedText.trim().length() < 2)
+    {
+        DBG ("WhisperEngine: Result too short ('" + combinedText + "'), treating as silence.");
+        return {};
     }
     
     DBG ("WhisperEngine: Success. " + juce::String(sequence.getWordCount()) + " words.");

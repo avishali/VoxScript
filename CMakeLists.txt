@@ -310,6 +310,9 @@ target_compile_definitions(${PLUGIN_NAME}
     PRIVATE
         $<$<BOOL:${PLUGIN_EDITOR_RESIZABLE}>:PLUGIN_EDITOR_RESIZABLE=1>
         PLUGIN_DEV_MODE=${PLUGIN_DEV_MODE_VALUE}
+        JucePlugin_ManufacturerWebsite=\"https://melechdsp.com\"
+        JucePlugin_ManufacturerEmail=\"support@melechdsp.com\"
+        JucePlugin_Manufacturer=\"MelechDSP\"
 )
 
 

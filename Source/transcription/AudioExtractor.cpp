@@ -90,14 +90,16 @@ juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource,
     }
 
     // Transfer stream ownership to writer
-    fileStream.release();
+    (void) fileStream.release();
 
     // 5. Setup Processing Buffers
     //    Calculate resampling parameters
-    const double resampleRatio = TARGET_SAMPLE_RATE / sourceRate;
+    const double resampleRatio = sourceRate / TARGET_SAMPLE_RATE;
     // CRITICAL FIX: Need much larger safety margin for resampler buffer
     // Lagrange interpolator can output more samples than expected due to filter latency
-    const int destBlockSize = static_cast<int> (CHUNK_SIZE * resampleRatio * 1.5) + 128;
+    // Ratio is input/output, so output = input / ratio
+    const int worstOut = static_cast<int> (std::ceil(CHUNK_SIZE / resampleRatio)) + 256;
+    const int destBlockSize = juce::jmax(1024, worstOut);
 
     // Buffer A: Raw multi-channel data from host (source rate)
     juce::AudioBuffer<float> sourceBuffer (numSourceChannels, CHUNK_SIZE);
@@ -151,12 +153,26 @@ juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource,
         }
 
         // E. Resample (Source Rate → 16kHz)
+        // Ratio is input/output.
         int numOutputSamples = resampler.process (
             resampleRatio,
             monoSourceBuffer.getReadPointer (0),
             resampledBuffer.getWritePointer (0),
             numToRead
         );
+        
+        // Safety Clamp
+        if (numOutputSamples > resampledBuffer.getNumSamples())
+        {
+            static bool hasWarned = false;
+            if (!hasWarned)
+            {
+                DBG ("AudioExtractor: Resampler output overrun! Clamping " + juce::String(numOutputSamples) 
+                     + " to " + juce::String(resampledBuffer.getNumSamples()));
+                hasWarned = true;
+            }
+            numOutputSamples = resampledBuffer.getNumSamples();
+        }
 
         // F. Write to Disk
         if (numOutputSamples > 0)
@@ -206,9 +222,9 @@ int64 AudioExtractor::getExpectedOutputSize (juce::ARAAudioSource* araSource)
     // Calculate output size at 16kHz
     const double sourceRate = reader->sampleRate;
     const int64 sourceSamples = reader->lengthInSamples;
-    const double resampleRatio = TARGET_SAMPLE_RATE / sourceRate;
+    const double resampleRatio = sourceRate / TARGET_SAMPLE_RATE;
     
-    return static_cast<int64> (sourceSamples * resampleRatio);
+    return static_cast<int64> (sourceSamples / resampleRatio);
 }
 
 //==============================================================================

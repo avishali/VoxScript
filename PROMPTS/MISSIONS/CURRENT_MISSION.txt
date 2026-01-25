@@ -1,52 +1,21 @@
-Implementer Prompt (Paste-Ready)
+Return only the final modified files.
+No markdown outside required per-file code blocks.
+C++17, JUCE, macOS.
 
-Return only the final content changes (diff not required). No markdown. No explanation. C++17. JUCE project.
+TASK:
+Add VOXSCRIPT_NO_LOGGING=1 env var that disables all VoxScript file logging and “debug session” initialization during plugin construction. Console stderr prints may remain.
 
-Goal: Reduce Whisper hallucinations on sung vocals in VoxScript. Update Whisper parameters in WhisperEngine::processSync(const juce::File&) to use more stable decoding and stricter “don’t emit text” gating.
+FILES TO MODIFY:
+- Wherever the VoxScript log session is created/opened (the code that prints “VoxScript Debug Session” and writes the log file path)
+- Source/PluginProcessor.cpp (only if logging is initialized there)
 
-Files to touch:
-	•	Source/transcription/WhisperEngine.cpp
+REQUIREMENTS:
+1) If getenv("VOXSCRIPT_NO_LOGGING") == "1":
+   - Do not create log directory
+   - Do not open/write any log files
+   - Do not start “Debug Session” blocks
+   - Do not allocate logger singletons
+2) Keep minimal stderr prints like “[VoxScript] createPluginFilter() called”.
 
-Files NOT to touch:
-	•	Any UI files
-	•	ARA controller/store/queue code
-	•	CMakeLists.txt
-
-Changes:
-	1.	Switch sampling from GREEDY to BEAM_SEARCH:
-
-	•	Replace whisper_full_default_params(WHISPER_SAMPLING_GREEDY) with whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
-
-	2.	Make decoding settings consistent with beam search:
-
-	•	Keep params.beam_search.beam_size = 5 (or set to 7 if you think it materially improves quality without being too slow)
-	•	Ensure greedy.best_of is NOT used/relied on for beam mode (it can remain set but should not be the primary knob; prefer beam settings)
-
-	3.	Remove “lyrics-bias” prompt and replace with neutral, anti-hallucination guidance:
-
-	•	Replace params.initial_prompt = “[LYRICS] …” with a neutral prompt, e.g.
-“Transcribe the vocal words you can clearly hear. If unsure, output nothing.”
-	•	Do NOT include bracket tags like [LYRICS].
-
-	4.	Tighten “no speech / low confidence” gating:
-
-	•	Increase params.no_speech_thold from 0.3f to 0.6f
-	•	Make params.logprob_thold stricter (more conservative). Change from -0.5f to -1.0f OR -1.2f (pick one, document in code comment).
-	•	Keep suppress_blank and suppress_non_speech_tokens enabled.
-
-	5.	Add a hard post-run guard before extracting segments:
-
-	•	After whisper_full(…) succeeds, compute numSegments = whisper_full_n_segments(ctx).
-	•	If numSegments == 0, return empty VoxSequence immediately.
-	•	Additionally, if the combined extracted text is extremely short (e.g. only 1–2 characters after trimming) return empty VoxSequence.
-This prevents returning junk like “.” or random fragments.
-
-	6.	Optional (only if the fields exist in this whisper.cpp version; must compile):
-
-	•	Enable VAD filtering (vad_filter = true) and set a conservative threshold if available.
-	•	If the struct fields do not exist, do not add compatibility hacks; just skip VAD.
-
-Constraints:
-	•	Must compile on macOS (arm64) with current project.
-	•	Preserve cancellation checks already present.
-	•	Keep existing resample-to-16k pipeline.
+DELIVERABLE:
+Provide final content of modified files only.
