@@ -1,62 +1,52 @@
-Mission 3 — Add TranscriptionJobQueue and Isolate Whisper
-
 Implementer Prompt (Paste-Ready)
 
-Return only the final modified files. No markdown. No explanation.
-C++17, JUCE. Must compile on macOS. ARA-safe.
+Return only the final content changes (diff not required). No markdown. No explanation. C++17. JUCE project.
 
-TASK: Add a job queue to run Whisper transcription off the realtime paths and publish results safely.
+Goal: Reduce Whisper hallucinations on sung vocals in VoxScript. Update Whisper parameters in WhisperEngine::processSync(const juce::File&) to use more stable decoding and stricter “don’t emit text” gating.
 
-GOALS:
-	1.	Add Source/engine/TranscriptionJobQueue.h + .cpp
-	•	Single worker thread.
-	•	enqueueTranscription(AudioSourceID id, JobSpec spec)
-	•	cancellation:
-	•	cancelAll()
-	•	cancelForAudioSource(id)
-	•	generation tokens to avoid applying stale results after document changes.
-	2.	WhisperEngine call sites:
-	•	WhisperEngine can remain as-is, but MUST be invoked only by TranscriptionJobQueue.
-	•	Remove any Whisper invocation from ARA callbacks or UI direct calls; replace with enqueue.
-	3.	Result publication:
-	•	On job completion, post to message thread:
-DocumentStore::applyTranscriptionResult(AudioSourceID, VoxSequence newSeq, meta)
-	•	Store increments version; UI refresh picks it up.
-	4.	Lifecycle:
-	•	DocumentController owns TranscriptionJobQueue.
-	•	On destruction/restore, cancel jobs.
+Files to touch:
+	•	Source/transcription/WhisperEngine.cpp
 
-CONSTRAINTS:
-	•	No deadlocks between store mutex and job thread.
-	•	No UI calls from worker thread.
+Files NOT to touch:
+	•	Any UI files
+	•	ARA controller/store/queue code
+	•	CMakeLists.txt
 
-FILES TO ADD:
-	•	Source/engine/TranscriptionJobQueue.h
-	•	Source/engine/TranscriptionJobQueue.cpp
+Changes:
+	1.	Switch sampling from GREEDY to BEAM_SEARCH:
 
-FILES TO MODIFY (expected):
-	•	Source/engine/WhisperEngine.h/.cpp (call sites only)
-	•	Source/ara/VoxScriptDocumentController.h/.cpp
-	•	Source/ui/DetailView.h/.cpp or ScriptView (where transcription is triggered)
+	•	Replace whisper_full_default_params(WHISPER_SAMPLING_GREEDY) with whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
 
-DELIVERABLE:
-Provide final content for each changed/added file.
+	2.	Make decoding settings consistent with beam search:
 
-Verifier Prompt (Paste-Ready)
+	•	Keep params.beam_search.beam_size = 5 (or set to 7 if you think it materially improves quality without being too slow)
+	•	Ensure greedy.best_of is NOT used/relied on for beam mode (it can remain set but should not be the primary knob; prefer beam settings)
 
-Return only a verification report with:
-	•	changed files
-	•	build steps
-	•	runtime verification steps and results
-	•	threading correctness notes
+	3.	Remove “lyrics-bias” prompt and replace with neutral, anti-hallucination guidance:
 
-VERIFY:
-	1.	Start transcription, then:
-	•	Move playhead, add/remove region, close project
-	•	No crash, no stale result applied after close
-	2.	Confirm Whisper only runs on worker thread:
-	•	add logging of thread id/name in Debug and confirm
-	3.	Confirm results update UI reliably after completion.
-	4.	Confirm cancellation works (job stops or results ignored).
+	•	Replace params.initial_prompt = “[LYRICS] …” with a neutral prompt, e.g.
+“Transcribe the vocal words you can clearly hear. If unsure, output nothing.”
+	•	Do NOT include bracket tags like [LYRICS].
 
-⸻
+	4.	Tighten “no speech / low confidence” gating:
+
+	•	Increase params.no_speech_thold from 0.3f to 0.6f
+	•	Make params.logprob_thold stricter (more conservative). Change from -0.5f to -1.0f OR -1.2f (pick one, document in code comment).
+	•	Keep suppress_blank and suppress_non_speech_tokens enabled.
+
+	5.	Add a hard post-run guard before extracting segments:
+
+	•	After whisper_full(…) succeeds, compute numSegments = whisper_full_n_segments(ctx).
+	•	If numSegments == 0, return empty VoxSequence immediately.
+	•	Additionally, if the combined extracted text is extremely short (e.g. only 1–2 characters after trimming) return empty VoxSequence.
+This prevents returning junk like “.” or random fragments.
+
+	6.	Optional (only if the fields exist in this whisper.cpp version; must compile):
+
+	•	Enable VAD filtering (vad_filter = true) and set a conservative threshold if available.
+	•	If the struct fields do not exist, do not add compatibility hacks; just skip VAD.
+
+Constraints:
+	•	Must compile on macOS (arm64) with current project.
+	•	Preserve cancellation checks already present.
+	•	Keep existing resample-to-16k pipeline.

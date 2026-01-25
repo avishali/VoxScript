@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include <ARA_Library/PlugIn/ARAPlug.h>
+#include <optional>
 #include <mutex>
 #include <unordered_map>
 #include "../transcription/VoxSequence.h"
@@ -53,7 +54,17 @@ public:
      * Uses the host-provided persistent ID if available, otherwise generates one.
      */
     AudioSourceID getOrCreateAudioSourceID(const ARA::PlugIn::AudioSource* audioSource);
+
+    /**
+     * Try to find an existing ID for an audio source without creating one.
+     */
+    std::optional<AudioSourceID> findAudioSourceID (const ARA::PlugIn::AudioSource* src) const;
     
+    /**
+     * Remove an audio source from the store using its ID.
+     */
+    void removeAudioSourceByID (AudioSourceID id);
+
     /**
      * Remove an audio source from the store (e.g. when deleted from project)
      */

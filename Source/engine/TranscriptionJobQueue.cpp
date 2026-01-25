@@ -9,6 +9,7 @@
 */
 
 #include "TranscriptionJobQueue.h"
+#include "../transcription/WhisperEngine.h"
 
 namespace VoxScript
 {
@@ -16,24 +17,30 @@ namespace VoxScript
 TranscriptionJobQueue::TranscriptionJobQueue()
     : juce::Thread("TranscriptionWorker")
 {
+    aliveFlag = std::make_shared<std::atomic<bool>>(true);
 }
 
 TranscriptionJobQueue::~TranscriptionJobQueue()
 {
+    if (aliveFlag)
+        aliveFlag->store(false);
+
+    // Requirement 1: Shutdown sequence
+    signalThreadShouldExit();
+
     {
         std::lock_guard<std::mutex> lock(queueMutex);
         stopRequested = true;
     }
-    
+
     cancelAll();
     queueCV.notify_all();
     stopThread(4000);
 }
 
-void TranscriptionJobQueue::initialise(VoxScriptDocumentStore* store, WhisperEngine* engine)
+void TranscriptionJobQueue::initialise(VoxScriptDocumentStore* store)
 {
     documentStore = store;
-    whisperEngine = engine;
     startThread();
 }
 
@@ -44,8 +51,16 @@ void TranscriptionJobQueue::setCompletionCallback(std::function<void(AudioSource
 
 void TranscriptionJobQueue::enqueueTranscription(const TranscriptionJob& job)
 {
+    // Requirement 3: Check exit flags
+    if (threadShouldExit())
+        return;
+
     {
         std::lock_guard<std::mutex> lock(queueMutex);
+        
+        if (stopRequested)
+            return;
+
         // Remove existing pending jobs for this source
         for (auto it = jobQueue.begin(); it != jobQueue.end(); )
         {
@@ -67,8 +82,10 @@ void TranscriptionJobQueue::cancelAll()
         jobQueue.clear();
     }
     
-    if (whisperEngine)
-        whisperEngine->cancelTranscription();
+    // Note: WhisperEngine ownership is now local to the worker thread.
+    // We cannot call cancelTranscription() directly.
+    // Clearing the queue prevents future jobs. 
+    // To stop the current job, we rely on the thread stopping.
 }
 
 void TranscriptionJobQueue::cancelForAudioSource(AudioSourceID sourceID)
@@ -89,6 +106,9 @@ void TranscriptionJobQueue::cancelForAudioSource(AudioSourceID sourceID)
 
 void TranscriptionJobQueue::run()
 {
+    // Requirement 2: Initialize WhisperEngine once when thread starts
+    auto whisper = std::make_unique<WhisperEngine>();
+
     while (!threadShouldExit())
     {
         TranscriptionJob currentJob;
@@ -98,7 +118,8 @@ void TranscriptionJobQueue::run()
             std::unique_lock<std::mutex> lock(queueMutex);
             queueCV.wait(lock, [this] { return stopRequested || !jobQueue.empty(); });
             
-            if (stopRequested && jobQueue.empty())
+            // Requirement 2: Check immediately after waking
+            if (threadShouldExit() || stopRequested)
                 break;
                 
             if (!jobQueue.empty())
@@ -109,34 +130,49 @@ void TranscriptionJobQueue::run()
             }
         }
         
-        if (hasJob && !threadShouldExit() && whisperEngine != nullptr)
+        // Requirement 2: Check before processing
+        if (threadShouldExit() || stopRequested)
+            break;
+        
+        if (hasJob && !threadShouldExit() && whisper != nullptr)
         {
             // Execute synchronous transcription
             VoxSequence result;
             
-            if (currentJob.sourcePtr != nullptr)
+            // ALWAYS process from file (safety)
+            if (currentJob.audioFile.existsAsFile())
             {
-                 result = whisperEngine->processSync(currentJob.sourcePtr);
-            }
-            else
-            {
-                 result = whisperEngine->processSync(currentJob.audioFile);
+                 // Use local whisper instance
+                 result = whisper->processSync(currentJob.audioFile);
+                 
+                 // Cleanup temp file
+                 currentJob.audioFile.deleteFile();
             }
             
             // Post result if valid and not cancelled (empty result usually means failed/cancelled)
-            if (result.getSegmentCount() > 0 && !threadShouldExit())
+            if (result.getWordCount() > 0 && !threadShouldExit())
             {
-                juce::MessageManager::callAsync([this, id = currentJob.sourceID, res = result]()
+                auto alive = aliveFlag;
+                auto* storePtr = documentStore;
+                auto cb = completionCallback;
+                auto id = currentJob.sourceID;
+                auto res = result;
+
+                juce::MessageManager::callAsync([alive, storePtr, cb, id, res]() mutable
                 {
-                    if (documentStore)
-                        documentStore->updateTranscription(id, res);
+                    if (!alive || !alive->load())
+                        return;
+
+                    if (storePtr)
+                        storePtr->updateTranscription(id, res);
                         
-                    if (completionCallback)
-                        completionCallback(id);
+                    if (cb)
+                        cb(id);
                 });
             }
         }
     }
+    // WhisperEngine destroyed automatically as unique_ptr goes out of scope here
 }
 
 } // namespace VoxScript

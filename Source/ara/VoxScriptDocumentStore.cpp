@@ -63,6 +63,36 @@ AudioSourceID VoxScriptDocumentStore::getOrCreateAudioSourceID(const ARA::PlugIn
     return newID;
 }
 
+std::optional<AudioSourceID> VoxScriptDocumentStore::findAudioSourceID(const ARA::PlugIn::AudioSource* audioSource) const
+{
+    if (audioSource == nullptr)
+        return std::nullopt;
+
+    std::lock_guard<std::mutex> lock(storeMutex);
+    auto it = runtimeParamsMap.find(audioSource);
+    if (it != runtimeParamsMap.end())
+        return it->second;
+
+    return std::nullopt;
+}
+
+void VoxScriptDocumentStore::removeAudioSourceByID(AudioSourceID id)
+{
+    std::lock_guard<std::mutex> lock(storeMutex);
+    
+    // Remove data
+    transcriptions.erase(id);
+    
+    // Remove mapping (Linear scan of map - acceptable for teardown)
+    for (auto it = runtimeParamsMap.begin(); it != runtimeParamsMap.end(); )
+    {
+        if (it->second == id)
+            it = runtimeParamsMap.erase(it);
+        else
+            ++it;
+    }
+}
+
 void VoxScriptDocumentStore::removeAudioSource(const ARA::PlugIn::AudioSource* audioSource)
 {
     std::lock_guard<std::mutex> lock(storeMutex);

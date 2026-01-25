@@ -61,15 +61,16 @@ bool AudioCache::ensureCached (AudioCacheID id, const juce::ARAAudioSource* sour
     return true;
 }
 
-const CachedAudio* AudioCache::get (AudioCacheID id) const
+std::shared_ptr<CachedAudio> AudioCache::get (AudioCacheID id) const
 {
     // RT-Safe: Try to acquire read lock. If we can't, return nullptr rather than block.
+    // Return by value (copy shared_ptr) to ensure lifetime safety for the caller.
     if (lock.tryEnterRead())
     {
-        const CachedAudio* result = nullptr;
+        std::shared_ptr<CachedAudio> result;
         auto it = cache.find(id);
         if (it != cache.end())
-            result = it->second.get();
+            result = it->second;
         
         lock.exitRead();
         return result;

@@ -71,7 +71,16 @@ public:
      * @param id The ID to look up
      * @return const pointer to CachedAudio, or nullptr if not found or lock busy
      */
-    const CachedAudio* get (AudioCacheID id) const;
+    /**
+     * @brief Retrieves cached audio for a source ID.
+     * 
+     * RT-Safe: Uses tryEnterRead to avoid blocking on lock.
+     * Returns a shared_ptr, ensuring the data remains valid even if removed from cache.
+     * 
+     * @param id The ID to look up
+     * @return shared_ptr to CachedAudio, or empty if not found or lock busy
+     */
+    std::shared_ptr<CachedAudio> get (AudioCacheID id) const;
 
     /**
      * @brief Removes a source from the cache.

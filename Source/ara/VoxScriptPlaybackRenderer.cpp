@@ -119,7 +119,7 @@ bool VoxScriptPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         if (!docController) continue;
         
         auto& audioCache = docController->getAudioCache();
-        const auto* cachedAudio = audioCache.get(audioSource);
+        auto cachedAudio = audioCache.get(audioSource);
         
         if (cachedAudio)
         {

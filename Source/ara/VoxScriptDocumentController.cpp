@@ -28,29 +28,51 @@ namespace VoxScript
 // Explicit constructor implementation for JUCE 8 ARA
 // (Replaces 'using' to allow initialization of jobQueue)
 // Note: We assume standard ARADocumentControllerSpecialisation signature.
-VoxScriptDocumentController::VoxScriptDocumentController(const ARA::PlugIn::PlugInEntry* entry, 
-                                                         const ARA::PlugIn::DocumentControllerInstance* instance)
-    : juce::ARADocumentControllerSpecialisation(entry, instance)
-{
-    // Mission 3: Initialize TranscriptionJobQueue
-    jobQueue.initialise(&documentStore, &whisperEngine);
-    
-    // Set callback to notify UI on completion
-    jobQueue.setCompletionCallback([this](AudioSourceID id) { 
-        // Notify all listeners that something changed
-        // Ideally we would pass the specific source if we could map ID->Source safely
-        notifyTranscriptionUpdated(nullptr); 
-    });
-    
-    // Mission 2: Audio Cache
-    whisperEngine.setAudioCache(&audioCache);
-}
+// Constructor removed: using base class constructor (lazy init)
 
 VoxScriptDocumentController::~VoxScriptDocumentController()
 {
+    if (controllerAlive)
+        controllerAlive->store(false);
+
     DBG ("================================================");
     DBG ("VOXSCRIPT: Document Controller DESTROYED");
     DBG ("================================================");
+}
+
+void VoxScriptDocumentController::ensureTranscriptionInfraInitialised()
+{
+    // If already initialised, return immediately (fast path)
+    if (transcriptionInfraInitialised.load())
+        return;
+
+    if (!controllerAlive)
+        controllerAlive = std::make_shared<std::atomic<bool>>(true);
+
+    // Use exchange to ensure only one thread performs initialization
+    // (though in ARA, these calls are usually main thread, but safety first)
+    if (transcriptionInfraInitialised.exchange(true))
+        return;
+
+    DBG ("VoxScriptDocumentController: Initialising Transcription Infrastructure (Lazy)");
+
+    // Mission 3: Initialize TranscriptionJobQueue
+    jobQueue.initialise(&documentStore);
+    
+    auto alive = controllerAlive;
+
+    // Set callback to notify UI on completion
+    // Mission 4: DEFERRED UPDATE PATTERN
+    // We do NOT call notifyTranscriptionUpdated() here because it touches ARA objects.
+    // We just mark the store as dirty. The update will happen in the next safe ARA call.
+    jobQueue.setCompletionCallback([alive, this](AudioSourceID id) {
+        if (!alive || !alive->load())
+            return;
+             
+        storeDirty.store(true);
+    });
+    
+    // Mission 2: Audio Cache configured (WhisperEngine setup removed as it is now internal to worker)
 }
 
 //==============================================================================
@@ -72,6 +94,8 @@ void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument
     juce::ignoreUnused (document);
     DBG ("VoxScriptDocumentController::didAddAudioSourceToDocument called");
     
+    ensureTranscriptionInfraInitialised();
+    
     // Mission 3: Enqueue transcription immediately if possible
     // Note: Audio source usually doesn't have sample access enabled yet creates.
     // However, if it does, we can queue it.
@@ -80,13 +104,34 @@ void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument
     {
         AudioSourceID id = documentStore.getOrCreateAudioSourceID(audioSource);
         
-        TranscriptionJob job;
-        job.sourceID = id;
-        job.sourcePtr = audioSource; // Pass pointer for extraction
+        // Extract audio to temp file immediately
+        // Note: This blocks momentarily but ensures we have a file before background job starts
+        // or we could push this to the background too? 
+        // Mission says: "extract to temp WAV immediately ... enqueue job with audioFile only"
         
-        DBG ("VoxScriptDocumentController: Enqueuing initial transcription for source " + juce::String(id));
-        jobQueue.enqueueTranscription(job);
+        // Ensure availability in cache first (optional, but good for other parts of app)
+        audioCache.ensureCached(audioSource, audioSource);
+        
+        juce::File jobFile = AudioExtractor::extractToTempWAV(audioSource, audioCache);
+        
+        if (jobFile.existsAsFile())
+        {
+            TranscriptionJob job;
+            job.sourceID = id;
+            job.audioFile = jobFile;
+            
+            DBG ("VoxScriptDocumentController: Enqueuing initial transcription for source " + juce::String(id));
+            jobQueue.enqueueTranscription(job);
+        }
     }
+    
+    // Mission 4: Signal that we are ready for background work
+    // We only enable this after the source is fully added and infra is ready.
+    araReadyForBackgroundWork.store(true);
+
+    // Mission 4: Check for deferred updates
+    if (storeDirty.exchange(false))
+        notifyTranscriptionUpdated(nullptr);
 }
 
 void VoxScriptDocumentController::doDestroyAudioSource (
@@ -94,15 +139,27 @@ void VoxScriptDocumentController::doDestroyAudioSource (
 {
     DBG ("VoxScriptDocumentController: Destroying audio source");
     
-    // Cancel any pending jobs for this source
-    // We need the ID. Since source is about to die, we can still look it up?
-    // The Store might still have it.
-    AudioSourceID id = documentStore.getOrCreateAudioSourceID(audioSource); // Lookup
-    jobQueue.cancelForAudioSource(id);
+    // Mission: Safe teardown without creating new IDs
+    auto idOpt = documentStore.findAudioSourceID(audioSource);
     
-    // Remove from cache and store
-    audioCache.remove(audioSource);
-    documentStore.removeAudioSource(audioSource); // Cleanup store mapping
+    if (idOpt.has_value())
+    {
+        AudioSourceID id = *idOpt;
+        
+        // Cancel pending jobs
+        jobQueue.cancelForAudioSource(id);
+    
+        // Remove from cache (by pointer, which is what the cache expects)
+        audioCache.remove(audioSource);
+        
+        // Remove from store by ID and cleanup mapping
+        documentStore.removeAudioSourceByID(id);
+    }
+    else
+    {
+        // If not found, it might be a partial create or already gone. 
+        // Just delete the object.
+    }
     
     delete audioSource;
 }
@@ -140,6 +197,8 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
 {
     // ... logging omitted ...
     
+    ensureTranscriptionInfraInitialised();
+
     auto* audioSource = modification->getAudioSource();
     if (audioSource)
     {
@@ -148,19 +207,20 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
         // Check if we have transcription
         const auto* sequence = documentStore.makeSnapshot().getSequence(id);
         
-        if (sequence == nullptr || sequence->getSegmentCount() == 0)
+        if (sequence == nullptr || sequence->getWordCount() == 0)
         {
              if (audioSource->isSampleAccessEnabled())
              {
-                 TranscriptionJob job;
-                 job.sourceID = id;
-                 job.sourcePtr = audioSource;
-                 DBG ("VoxScriptDocumentController: Enqueuing transcription (via PlaybackRegion creation)");
-                 jobQueue.enqueueTranscription(job);
+                 // Delegate to main enqueue method to reuse safe extraction logic
+                 enqueueTranscriptionForSource(audioSource);
              }
         }
     }
     
+    // Mission 4: Check for deferred updates
+    if (storeDirty.exchange(false))
+        notifyTranscriptionUpdated(nullptr);
+
     return new juce::ARAPlaybackRegion (modification, hostRef);
 }
 
@@ -226,6 +286,8 @@ void VoxScriptDocumentController::enqueueTranscriptionForSource(juce::ARAAudioSo
 {
     if (source == nullptr) return;
     
+    ensureTranscriptionInfraInitialised();
+
     // Check sample access
     if (!source->isSampleAccessEnabled())
     {
@@ -235,12 +297,25 @@ void VoxScriptDocumentController::enqueueTranscriptionForSource(juce::ARAAudioSo
     
     AudioSourceID id = documentStore.getOrCreateAudioSourceID(source);
     
-    TranscriptionJob job;
-    job.sourceID = id;
-    job.sourcePtr = source;
+    // Ensure caching (good practice)
+    audioCache.ensureCached(source, source);
     
-    DBG ("VoxScriptDocumentController: Enqueuing transcription request for source " + juce::String(id));
-    jobQueue.enqueueTranscription(job);
+    // Extract to temp WAV immediately
+    juce::File jobFile = AudioExtractor::extractToTempWAV(source, audioCache);
+    
+    if (jobFile.existsAsFile())
+    {
+        TranscriptionJob job;
+        job.sourceID = id;
+        job.audioFile = jobFile;
+        
+        DBG ("VoxScriptDocumentController: Enqueuing transcription request (safe file) for source " + juce::String(id));
+        jobQueue.enqueueTranscription(job);
+    }
+    else
+    {
+         DBG("VoxScriptDocumentController: Failed to create temp job file");
+    }
 }
 
 void VoxScriptDocumentController::addListener (Listener* listener)

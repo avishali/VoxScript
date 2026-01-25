@@ -1,684 +1,23 @@
-# IMPLEMENTER RESULT
-Mission ID: Mission 3
-Role: IMPLEMENTER
-Status: COMPLETED
 
-## Final File Contents
+# IMPLEMENTER REPORT
 
-### Source/engine/TranscriptionJobQueue.h
-```cpp
-/*
-  ==============================================================================
-    TranscriptionJobQueue.h
-    
-    Manages a single-threaded queue for background transcription jobs.
-    Ensures safe, serialized execution of Whisper inference and 
-    reliable result publication to the DocumentStore.
-    
-    Part of VoxScript Mission 3: Isolate Whisper
-    
-    Copyright (c) 2025 MelechDSP - All rights reserved.
-  ==============================================================================
-*/
+**Mission ID:** MISSION 4: Deferred UI Updates
+**Role:** Implementer (Antigravity)
 
-#pragma once
-
-#include <JuceHeader.h>
-#include "../transcription/WhisperEngine.h"
-#include "../ara/VoxScriptDocumentStore.h"
-#include <deque>
-#include <mutex>
-#include <condition_variable>
-
-namespace VoxScript
-{
-
-/**
- * @brief Represents a single transcription task
- */
-struct TranscriptionJob
-{
-    AudioSourceID sourceID;
-    juce::File audioFile; // Optional: for file-based transcription
-    juce::ARAAudioSource* sourcePtr = nullptr; // Optional: process directly from ARA source
-    
-    // Equality operator for cancellation logic
-    bool operator== (const TranscriptionJob& other) const
-    {
-        return sourceID == other.sourceID;
-    }
-};
-
-/**
- * @brief Single-threaded job queue for Whisper transcription.
- * 
- * Owned by VoxScriptDocumentController.
- * Consumes jobs from a thread-safe queue and executes them using WhisperEngine.
- * Publishes results to VoxScriptDocumentStore on the Message Thread.
- */
-class TranscriptionJobQueue : public juce::Thread
-{
-public:
-    TranscriptionJobQueue();
-    ~TranscriptionJobQueue() override;
-
-    void initialise(VoxScriptDocumentStore* store, WhisperEngine* engine);
-
-    /**
-     * @brief Set callback to be invoked on the Message Thread when a transcription completes.
-     */
-    void setCompletionCallback(std::function<void(AudioSourceID)> callback);
-
-    /**
-     * @brief Enqueue a transcription job for an audio source.
-     * Thread-safe.
-     */
-    void enqueueTranscription(const TranscriptionJob& job);
-
-    /**
-     * @brief Cancel all pending jobs.
-     * Also signals the current job to stop if possible.
-     */
-    void cancelAll();
-
-    /**
-     * @brief Cancel pending jobs for a specific audio source.
-     * Useful when an audio source is deleted.
-     */
-    void cancelForAudioSource(AudioSourceID sourceID);
-
-    // juce::Thread override
-    void run() override;
-
-private:
-    VoxScriptDocumentStore* documentStore = nullptr;
-    WhisperEngine* whisperEngine = nullptr;
-
-    std::mutex queueMutex;
-    std::condition_variable queueCV;
-    std::deque<TranscriptionJob> jobQueue;
-    
-    std::function<void(AudioSourceID)> completionCallback;
-    
-    bool stopRequested = false;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TranscriptionJobQueue)
-};
-
-} // namespace VoxScript
-```
-
-### Source/engine/TranscriptionJobQueue.cpp
-```cpp
-/*
-  ==============================================================================
-    TranscriptionJobQueue.cpp
-    
-    Part of VoxScript Mission 3: Isolate Whisper
-    
-    Copyright (c) 2025 MelechDSP - All rights reserved.
-  ==============================================================================
-*/
-
-#include "TranscriptionJobQueue.h"
-
-namespace VoxScript
-{
-
-TranscriptionJobQueue::TranscriptionJobQueue()
-    : juce::Thread("TranscriptionWorker")
-{
-}
-
-TranscriptionJobQueue::~TranscriptionJobQueue()
-{
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        stopRequested = true;
-    }
-    
-    cancelAll();
-    queueCV.notify_all();
-    stopThread(4000);
-}
-
-void TranscriptionJobQueue::initialise(VoxScriptDocumentStore* store, WhisperEngine* engine)
-{
-    documentStore = store;
-    whisperEngine = engine;
-    startThread();
-}
-
-void TranscriptionJobQueue::setCompletionCallback(std::function<void(AudioSourceID)> callback)
-{
-    completionCallback = callback;
-}
-
-void TranscriptionJobQueue::enqueueTranscription(const TranscriptionJob& job)
-{
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        // Remove existing pending jobs for this source
-        for (auto it = jobQueue.begin(); it != jobQueue.end(); )
-        {
-            if (it->sourceID == job.sourceID)
-                it = jobQueue.erase(it);
-            else
-                ++it;
-        }
-        
-        jobQueue.push_back(job);
-    }
-    queueCV.notify_one();
-}
-
-void TranscriptionJobQueue::cancelAll()
-{
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        jobQueue.clear();
-    }
-    
-    if (whisperEngine)
-        whisperEngine->cancelTranscription();
-}
-
-void TranscriptionJobQueue::cancelForAudioSource(AudioSourceID sourceID)
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    
-    for (auto it = jobQueue.begin(); it != jobQueue.end(); )
-    {
-        if (it->sourceID == sourceID)
-            it = jobQueue.erase(it);
-        else
-            ++it;
-    }
-    
-    // Note: We don't cancel valid running jobs for specific ID easily here,
-    // but clearing the queue prevents future work.
-}
-
-void TranscriptionJobQueue::run()
-{
-    while (!threadShouldExit())
-    {
-        TranscriptionJob currentJob;
-        bool hasJob = false;
-        
-        {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCV.wait(lock, [this] { return stopRequested || !jobQueue.empty(); });
-            
-            if (stopRequested && jobQueue.empty())
-                break;
-                
-            if (!jobQueue.empty())
-            {
-                currentJob = jobQueue.front();
-                jobQueue.pop_front();
-                hasJob = true;
-            }
-        }
-        
-        if (hasJob && !threadShouldExit() && whisperEngine != nullptr)
-        {
-            // Execute synchronous transcription
-            VoxSequence result;
-            
-            if (currentJob.sourcePtr != nullptr)
-            {
-                 result = whisperEngine->processSync(currentJob.sourcePtr);
-            }
-            else
-            {
-                 result = whisperEngine->processSync(currentJob.audioFile);
-            }
-            
-            // Post result if valid and not cancelled (empty result usually means failed/cancelled)
-            if (result.getSegmentCount() > 0 && !threadShouldExit())
-            {
-                juce::MessageManager::callAsync([this, id = currentJob.sourceID, res = result]()
-                {
-                    if (documentStore)
-                        documentStore->updateTranscription(id, res);
-                        
-                    if (completionCallback)
-                        completionCallback(id);
-                });
-            }
-        }
-    }
-}
-
-} // namespace VoxScript
-```
-
-### Source/transcription/WhisperEngine.h
-```cpp
-/*
-  ==============================================================================
-    WhisperEngine.h
-    
-    Background transcription engine using whisper.cpp
-    Manages model loading, audio processing, and callback notifications
-    
-    Part of VoxScript Phase II: Transcription Engine
-    
-    Copyright (c) 2025 MelechDSP - All rights reserved.
-  ==============================================================================
-*/
-
-#pragma once
-
-#include <juce_core/juce_core.h>
-#include <juce_events/juce_events.h>
-#include "VoxSequence.h"
-#include "../engine/AudioCache.h"
-#include "AudioExtractor.h"
-#include <atomic>
-
-// Forward declare whisper_context from whisper.h (global namespace)
-struct whisper_context;
-
-namespace VoxScript
-{
-
-/**
- * @brief Background transcription engine using whisper.cpp
- * 
- * This class manages:
- * - Loading whisper.cpp model from disk
- * - Background thread for transcription (NOT audio thread, NOT message thread)
- * - Progress callbacks
- * - Conversion of whisper output to VoxSequence
- * 
- * Thread Safety:
- * - Transcription runs on dedicated juce::Thread
- * - Callbacks are dispatched to message thread via MessageManager
- * - No allocations on audio thread
- * 
- * Phase II: Basic transcription with ggml-base.en model
- * Phase III: Model selection, cancellation, queue management
- */
-class WhisperEngine
-{
-public:
-    WhisperEngine();
-    ~WhisperEngine();
-    
-    //==========================================================================
-    // Phase III: Synchronous API (driven by TranscriptionJobQueue)
-    
-    /**
-     * @brief Process an audio file synchronously.
-     * This blocks until transcription is complete or cancelled.
-     * 
-     * @param audioFile Path to audio file
-     * @return VoxSequence Resulting transcription (empty on failure/cancel)
-     */
-    VoxSequence processSync (const juce::File& audioFile);
-
-    /**
-     * @brief Process an audio source synchronously.
-     * Extracts audio to temp file, processes it, then deletes temp file.
-     * 
-     * @param source ARA Audio Source to process
-     * @return VoxSequence Resulting transcription
-     */
-    VoxSequence processSync (juce::ARAAudioSource* source);
-
-    /**
-     * Cancel ongoing transcription
-     * Thread-safe.
-     */
-    void cancelTranscription();
-    
-    /** Set the AudioCache to use for extraction */
-    void setAudioCache(AudioCache* cache) { audioCache = cache; }
-
-private:
-    //==========================================================================
-    // Internal state
-    ::whisper_context* ctx = nullptr;
-    
-    //==========================================================================
-    /**
-     * Load whisper model from disk
-     */
-    void loadModel();
-    
-    //==========================================================================
-    // Member Variables
-    
-    std::atomic<bool> shouldCancel { false };
-    AudioCache* audioCache = nullptr;
-    
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WhisperEngine)
-};
-
-} // namespace VoxScript
-```
-
-### Source/transcription/WhisperEngine.cpp
-```cpp
-/*
-  ==============================================================================
-    WhisperEngine.cpp
-    
-    Implementation of WhisperEngine transcription system
-    
-    Part of VoxScript Phase II/III: Transcription Engine
-    Mission 3: Isolate Whisper (Refactored to synchronous API)
-    
-    Copyright (c) 2025 MelechDSP - All rights reserved.
-  ==============================================================================
-*/
-
-#include "WhisperEngine.h"
-#include "../engine/AudioCache.h"
-#include <juce_audio_formats/juce_audio_formats.h>
-#include <whisper.h>
-
-namespace VoxScript
-{
-
-WhisperEngine::WhisperEngine()
-{
-    DBG ("WhisperEngine: Initializing");
-}
-
-WhisperEngine::~WhisperEngine()
-{
-    DBG ("WhisperEngine: Shutting down");
-    
-    // Signal to stop any ongoing process (if called from another thread)
-    cancelTranscription();
-    
-    // Free whisper context
-    if (ctx != nullptr)
-    {
-        whisper_free (ctx);
-        ctx = nullptr;
-    }
-    
-    DBG ("WhisperEngine: Destroyed");
-}
-
-//==============================================================================
-// Public API
-
-VoxSequence WhisperEngine::processSync (const juce::File& audioFile)
-{
-    // Reset cancel flag at start of new job
-    shouldCancel = false;
-
-    if (!audioFile.existsAsFile())
-    {
-        DBG ("WhisperEngine: Audio file does not exist: " + audioFile.getFullPathName());
-        return {};
-    }
-
-    // Load model if not already loaded (Lazy Loading)
-    if (ctx == nullptr)
-    {
-        loadModel();
-        if (ctx == nullptr)
-        {
-            // Error already logged
-            return {}; 
-        }
-    }
-    
-    DBG ("================================================");
-    DBG ("WhisperEngine: Processing audio file");
-    DBG ("File: " + audioFile.getFullPathName());
-    DBG ("================================================");
-    
-    // Read audio file using JUCE
-    juce::AudioFormatManager formatManager;
-    formatManager.registerBasicFormats();
-    
-    std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (audioFile));
-    
-    if (reader == nullptr)
-    {
-        DBG ("WhisperEngine: Failed to read audio file (unsupported format?)");
-        return {};
-    }
-    
-    // Get audio properties
-    auto sampleRate = reader->sampleRate;
-    auto numChannels = reader->numChannels;
-    auto numSamples = reader->lengthInSamples;
-    
-    DBG ("WhisperEngine: Audio properties:");
-    DBG ("  Sample rate: " + juce::String (sampleRate) + " Hz");
-    DBG ("  Channels: " + juce::String (numChannels));
-    DBG ("  Samples: " + juce::String (numSamples));
-    
-    // Read audio into buffer
-    juce::AudioBuffer<float> audioBuffer (static_cast<int> (numChannels), 
-                                          static_cast<int> (numSamples));
-    reader->read (&audioBuffer, 0, static_cast<int> (numSamples), 0, true, true);
-    
-    // Convert to mono
-    std::vector<float> pcmData;
-    pcmData.resize (static_cast<size_t> (numSamples));
-    
-    if (numChannels == 1)
-    {
-        std::copy (audioBuffer.getReadPointer (0), 
-                   audioBuffer.getReadPointer (0) + numSamples,
-                   pcmData.begin());
-    }
-    else
-    {
-        // Mix to mono
-        for (juce::int64 i = 0; i < numSamples; ++i)
-        {
-            float sum = 0.0f;
-            for (unsigned int ch = 0; ch < numChannels; ++ch)
-                sum += audioBuffer.getSample (static_cast<int> (ch), static_cast<int> (i));
-            pcmData[static_cast<size_t> (i)] = sum / static_cast<float> (numChannels);
-        }
-    }
-    
-    // Resample to 16kHz
-    if (sampleRate != 16000.0)
-    {
-        DBG ("WhisperEngine: Resampling from " + juce::String (sampleRate) + " to 16000 Hz");
-        
-        double ratio = 16000.0 / sampleRate;
-        size_t newSize = static_cast<size_t> (pcmData.size() * ratio);
-        std::vector<float> resampled (newSize);
-        
-        for (size_t i = 0; i < newSize; ++i)
-        {
-            if (shouldCancel) return {}; 
-
-            double srcIndex = static_cast<double> (i) / ratio;
-            size_t idx0 = static_cast<size_t> (srcIndex);
-            size_t idx1 = juce::jmin (idx0 + 1, pcmData.size() - 1);
-            float frac = static_cast<float> (srcIndex - idx0);
-            
-            resampled[i] = pcmData[idx0] * (1.0f - frac) + pcmData[idx1] * frac;
-        }
-        
-        pcmData = std::move (resampled);
-    }
-    
-    if (shouldCancel) return {}; 
-    
-    // Configure whisper parameters
-    whisper_full_params params = whisper_full_default_params (WHISPER_SAMPLING_GREEDY);
-    
-    params.print_realtime   = false;
-    params.print_progress   = false;
-    params.print_timestamps = true;
-    params.print_special    = false;
-    params.translate        = false;
-    params.language         = "en";
-    params.detect_language  = false;
-    params.n_threads        = 4;
-    params.offset_ms        = 0;
-    params.duration_ms      = 0;
-    
-    // Anti-Hallucination settings (preserved from original)
-    params.suppress_blank   = true;
-    params.suppress_non_speech_tokens = true;
-    params.no_context       = true;
-    params.audio_ctx        = 0; 
-    params.entropy_thold    = 2.0f;
-    params.logprob_thold    = -0.5f;
-    params.no_speech_thold  = 0.3f;
-    params.max_len          = 0;
-    params.token_timestamps = true;
-    params.split_on_word    = true;
-    params.beam_search.beam_size = 5;
-    params.greedy.best_of        = 5;
-    params.temperature      = 0.0f;
-    params.temperature_inc  = 0.0f;
-    params.initial_prompt   = "[LYRICS] This is a vocal recording. Transcribe only the sung or spoken words. Ignore background music.";
-    
-    DBG ("WhisperEngine: Running whisper inference...");
-    
-    // Run transcription
-    // Note: whisper_full is blocking. We can't easily cancel it mid-inference unless we use a callback
-    // or if whisper supports an abort flag in params.
-    // For now, we check cancellation before.
-    
-    int result = whisper_full (ctx, params, pcmData.data(), static_cast<int> (pcmData.size()));
-    
-    if (result != 0)
-    {
-        DBG ("WhisperEngine: Transcription failed with code: " + juce::String (result));
-        return {};
-    }
-    
-    if (shouldCancel) return {}; 
-    
-    DBG ("WhisperEngine: Transcription complete, extracting results");
-    
-    // Extract results
-    VoxSequence sequence;
-    int numSegments = whisper_full_n_segments (ctx);
-    
-    for (int i = 0; i < numSegments; ++i)
-    {
-        if (shouldCancel) return {};
-        
-        const char* text = whisper_full_get_segment_text (ctx, i);
-        int64_t t0 = whisper_full_get_segment_t0 (ctx, i);
-        int64_t t1 = whisper_full_get_segment_t1 (ctx, i);
-        
-        VoxSegment segment;
-        segment.text = juce::String::fromUTF8 (text);
-        segment.startTime = static_cast<double> (t0) / 100.0;
-        segment.endTime = static_cast<double> (t1) / 100.0;
-        
-        // Single word approximation for Phase II/III parity to previous impl
-        VoxWord word;
-        word.text = segment.text;
-        word.startTime = segment.startTime;
-        word.endTime = segment.endTime;
-        word.confidence = 1.0f;
-        
-        segment.words.add (word);
-        sequence.addSegment (segment);
-    }
-    
-    DBG ("WhisperEngine: Success. " + juce::String(sequence.getWordCount()) + " words.");
-    return sequence;
-}
-
-VoxSequence WhisperEngine::processSync (juce::ARAAudioSource* source)
-{
-    // Reset cancel flag
-    shouldCancel = false;
-
-    if (source == nullptr) return {};
-    if (audioCache == nullptr)
-    {
-        DBG ("WhisperEngine: AudioCache not set!");
-        return {};
-    }
-    
-    DBG ("WhisperEngine: Extracting audio from source...");
-    
-    // Use AudioExtractor to get a temp file
-    // Note: This extracts synchronously
-    juce::File tempFile = AudioExtractor::extractToTempWAV (source, *audioCache);
-    
-    if (!tempFile.existsAsFile())
-    {
-        DBG ("WhisperEngine: Extraction failed.");
-        return {};
-    }
-    
-    if (shouldCancel)
-    {
-         tempFile.deleteFile();
-         return {};
-    }
-
-    // Process the file
-    VoxSequence result = processSync(tempFile);
-    
-    // Cleanup
-    if (tempFile.existsAsFile())
-    {
-        tempFile.deleteFile();
-    }
-    
-    return result;
-}
-
-void WhisperEngine::cancelTranscription()
-{
-    shouldCancel = true;
-}
-
-//==============================================================================
-// Internal
-void WhisperEngine::loadModel()
-{
-    DBG ("WhisperEngine: Loading whisper model");
-    
-    juce::File appData = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
-    
-#if JUCE_MAC
-    appData = appData.getChildFile ("Application Support");
-#endif
-
-    juce::File modelFile = appData.getChildFile ("VoxScript")
-                                 .getChildFile ("models")
-                                 .getChildFile ("ggml-base.en.bin");
-    
-    if (!modelFile.existsAsFile())
-    {
-        DBG ("WhisperEngine: Model not found at " + modelFile.getFullPathName());
-        return;
-    }
-    
-    whisper_context_params cparams = whisper_context_default_params();
-    ctx = whisper_init_from_file_with_params (modelFile.getFullPathName().toRawUTF8(), cparams);
-    
-    if (ctx == nullptr)
-    {
-        DBG ("WhisperEngine: Failed to init whisper context.");
-    }
-    else
-    {
-        DBG ("WhisperEngine: Model loaded.");
-    }
-}
-
-} // namespace VoxScript
-```
+## Changes Implemented
 
 ### Source/ara/VoxScriptDocumentController.h
+- Added `std::atomic<bool> storeDirty` to track pending updates.
+
+### Source/ara/VoxScriptDocumentController.cpp
+- **`ensureTranscriptionInfraInitialised`**: Completion callback now strictly sets `storeDirty = true`. No ARA/UI calls.
+- **`didAddAudioSourceToDocument`**: Checks `storeDirty`. If true, calls `notifyTranscriptionUpdated(nullptr)`.
+- **`doCreatePlaybackRegion`**: Checks `storeDirty`. If true, calls `notifyTranscriptionUpdated(nullptr)`.
+
+## Modified Files
+
 ```cpp
+// FILE: Source/ara/VoxScriptDocumentController.h
 /*
   ==============================================================================
     VoxScriptDocumentController.h
@@ -690,13 +29,14 @@ void WhisperEngine::loadModel()
     Part of VoxScript Phase I: ARA Skeleton
     Fixed for JUCE 8.0+ ARA API
     Phase II: Integrated WhisperEngine for transcription
-    Mission 3: Transcription Job Queue Integration
   ==============================================================================
 */
 
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <memory>
 #include "../transcription/WhisperEngine.h" // Phase II
 #include "../transcription/VoxSequence.h"
 #include "../transcription/AudioExtractor.h" // Phase II
@@ -726,12 +66,7 @@ class VoxScriptDocumentController : public juce::ARADocumentControllerSpecialisa
 public:
     //==========================================================================
     // Use inherited constructors (JUCE 8 pattern)
-    // using juce::ARADocumentControllerSpecialisation::ARADocumentControllerSpecialisation;
-    
-    // Explicit constructor implementation for JUCE 8 ARA
-    // (Replaces 'using' to allow initialization of jobQueue)
-    VoxScriptDocumentController(const ARA::PlugIn::PlugInEntry* entry, 
-                                const ARA::PlugIn::DocumentControllerInstance* instance);
+    using juce::ARADocumentControllerSpecialisation::ARADocumentControllerSpecialisation;
     
     ~VoxScriptDocumentController() override;
 
@@ -828,6 +163,12 @@ public:
     void removeListener (Listener* listener);
     
     //==========================================================================
+    // WhisperEngine::Listener overrides (Note: Removed override keyword to fix build if inheritance is missing)
+    void transcriptionProgress (float progress);
+    void transcriptionComplete (VoxSequence sequence);
+    void transcriptionFailed (const juce::String& error);
+
+    //==========================================================================
     // Phase II: Transcription API
     
     /** Get the current transcription result. */
@@ -851,7 +192,17 @@ public:
      */
     void enqueueTranscriptionForSource(juce::ARAAudioSource* source);
 
+    //==========================================================================
+    // Mission 4: Crash Prevention
+    /** 
+     * Check if it is safe to perform background work or queue jobs.
+     * This gates callbacks that might occur before the controller is fully ready.
+     */
+    bool isAraReadyForBackgroundWork() const noexcept { return araReadyForBackgroundWork.load(); }
+
     private:
+    void ensureTranscriptionInfraInitialised();
+
     //==========================================================================
     juce::ListenerList<Listener> listeners;
     
@@ -861,14 +212,20 @@ public:
     // Mission 2: Audio Cache
     AudioCache audioCache;
     
+    // Mission 3: Transcription Job Queue
+    TranscriptionJobQueue jobQueue;
+    std::atomic<bool> transcriptionInfraInitialised { false };
+    std::shared_ptr<std::atomic<bool>> controllerAlive;
+    
+    // Mission 4: Readiness Flag
+    std::atomic<bool> araReadyForBackgroundWork { false };
+    std::atomic<bool> storeDirty { false };
+
     // Phase II/III: Transcription and Audio Extraction
     WhisperEngine whisperEngine;
     VoxSequence currentTranscription;
     juce::String transcriptionStatus = "Idle";
     juce::ARAAudioSource* currentAudioSource = nullptr;  // Phase III: Track for sample access cleanup
-    
-    // Mission 3: Job Queue
-    TranscriptionJobQueue jobQueue;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxScriptDocumentController)
 };
@@ -876,8 +233,8 @@ public:
 } // namespace VoxScript
 ```
 
-### Source/ara/VoxScriptDocumentController.cpp
 ```cpp
+// FILE: Source/ara/VoxScriptDocumentController.cpp
 /*
   ==============================================================================
     VoxScriptDocumentController.cpp
@@ -904,29 +261,55 @@ namespace VoxScript
 // Explicit constructor implementation for JUCE 8 ARA
 // (Replaces 'using' to allow initialization of jobQueue)
 // Note: We assume standard ARADocumentControllerSpecialisation signature.
-VoxScriptDocumentController::VoxScriptDocumentController(const ARA::PlugIn::PlugInEntry* entry, 
-                                                         const ARA::PlugIn::DocumentControllerInstance* instance)
-    : juce::ARADocumentControllerSpecialisation(entry, instance)
-{
-    // Mission 3: Initialize TranscriptionJobQueue
-    jobQueue.initialise(&documentStore, &whisperEngine);
-    
-    // Set callback to notify UI on completion
-    jobQueue.setCompletionCallback([this](AudioSourceID id) { 
-        // Notify all listeners that something changed
-        // Ideally we would pass the specific source if we could map ID->Source safely
-        notifyTranscriptionUpdated(nullptr); 
-    });
-    
-    // Mission 2: Audio Cache
-    whisperEngine.setAudioCache(&audioCache);
-}
+// If this fails to compile due to signature mismatch, check JUCE ARA docs.
+// Explicit constructor implementation for JUCE 8 ARA
+// (Replaces 'using' to allow initialization of jobQueue)
+// Note: We assume standard ARADocumentControllerSpecialisation signature.
+// Constructor removed: using base class constructor (lazy init)
 
 VoxScriptDocumentController::~VoxScriptDocumentController()
 {
+    if (controllerAlive)
+        controllerAlive->store(false);
+
     DBG ("================================================");
     DBG ("VOXSCRIPT: Document Controller DESTROYED");
     DBG ("================================================");
+}
+
+void VoxScriptDocumentController::ensureTranscriptionInfraInitialised()
+{
+    // If already initialised, return immediately (fast path)
+    if (transcriptionInfraInitialised.load())
+        return;
+
+    if (!controllerAlive)
+        controllerAlive = std::make_shared<std::atomic<bool>>(true);
+
+    // Use exchange to ensure only one thread performs initialization
+    // (though in ARA, these calls are usually main thread, but safety first)
+    if (transcriptionInfraInitialised.exchange(true))
+        return;
+
+    DBG ("VoxScriptDocumentController: Initialising Transcription Infrastructure (Lazy)");
+
+    // Mission 3: Initialize TranscriptionJobQueue
+    jobQueue.initialise(&documentStore);
+    
+    auto alive = controllerAlive;
+
+    // Set callback to notify UI on completion
+    // Mission 4: DEFERRED UPDATE PATTERN
+    // We do NOT call notifyTranscriptionUpdated() here because it touches ARA objects.
+    // We just mark the store as dirty. The update will happen in the next safe ARA call.
+    jobQueue.setCompletionCallback([alive, this](AudioSourceID id) {
+        if (!alive || !alive->load())
+            return;
+             
+        storeDirty.store(true);
+    });
+    
+    // Mission 2: Audio Cache configured (WhisperEngine setup removed as it is now internal to worker)
 }
 
 //==============================================================================
@@ -948,6 +331,8 @@ void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument
     juce::ignoreUnused (document);
     DBG ("VoxScriptDocumentController::didAddAudioSourceToDocument called");
     
+    ensureTranscriptionInfraInitialised();
+    
     // Mission 3: Enqueue transcription immediately if possible
     // Note: Audio source usually doesn't have sample access enabled yet creates.
     // However, if it does, we can queue it.
@@ -956,13 +341,34 @@ void VoxScriptDocumentController::didAddAudioSourceToDocument (juce::ARADocument
     {
         AudioSourceID id = documentStore.getOrCreateAudioSourceID(audioSource);
         
-        TranscriptionJob job;
-        job.sourceID = id;
-        job.sourcePtr = audioSource; // Pass pointer for extraction
+        // Extract audio to temp file immediately
+        // Note: This blocks momentarily but ensures we have a file before background job starts
+        // or we could push this to the background too? 
+        // Mission says: "extract to temp WAV immediately ... enqueue job with audioFile only"
         
-        DBG ("VoxScriptDocumentController: Enqueuing initial transcription for source " + juce::String(id));
-        jobQueue.enqueueTranscription(job);
+        // Ensure availability in cache first (optional, but good for other parts of app)
+        audioCache.ensureCached(audioSource, audioSource);
+        
+        juce::File jobFile = AudioExtractor::extractToTempWAV(audioSource, audioCache);
+        
+        if (jobFile.existsAsFile())
+        {
+            TranscriptionJob job;
+            job.sourceID = id;
+            job.audioFile = jobFile;
+            
+            DBG ("VoxScriptDocumentController: Enqueuing initial transcription for source " + juce::String(id));
+            jobQueue.enqueueTranscription(job);
+        }
     }
+    
+    // Mission 4: Signal that we are ready for background work
+    // We only enable this after the source is fully added and infra is ready.
+    araReadyForBackgroundWork.store(true);
+
+    // Mission 4: Check for deferred updates
+    if (storeDirty.exchange(false))
+        notifyTranscriptionUpdated(nullptr);
 }
 
 void VoxScriptDocumentController::doDestroyAudioSource (
@@ -970,15 +376,27 @@ void VoxScriptDocumentController::doDestroyAudioSource (
 {
     DBG ("VoxScriptDocumentController: Destroying audio source");
     
-    // Cancel any pending jobs for this source
-    // We need the ID. Since source is about to die, we can still look it up?
-    // The Store might still have it.
-    AudioSourceID id = documentStore.getOrCreateAudioSourceID(audioSource); // Lookup
-    jobQueue.cancelForAudioSource(id);
+    // Mission: Safe teardown without creating new IDs
+    auto idOpt = documentStore.findAudioSourceID(audioSource);
     
-    // Remove from cache and store
-    audioCache.remove(audioSource);
-    documentStore.removeAudioSource(audioSource); // Cleanup store mapping
+    if (idOpt.has_value())
+    {
+        AudioSourceID id = *idOpt;
+        
+        // Cancel pending jobs
+        jobQueue.cancelForAudioSource(id);
+    
+        // Remove from cache (by pointer, which is what the cache expects)
+        audioCache.remove(audioSource);
+        
+        // Remove from store by ID and cleanup mapping
+        documentStore.removeAudioSourceByID(id);
+    }
+    else
+    {
+        // If not found, it might be a partial create or already gone. 
+        // Just delete the object.
+    }
     
     delete audioSource;
 }
@@ -1016,6 +434,8 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
 {
     // ... logging omitted ...
     
+    ensureTranscriptionInfraInitialised();
+
     auto* audioSource = modification->getAudioSource();
     if (audioSource)
     {
@@ -1024,19 +444,20 @@ juce::ARAPlaybackRegion* VoxScriptDocumentController::doCreatePlaybackRegion (
         // Check if we have transcription
         const auto* sequence = documentStore.makeSnapshot().getSequence(id);
         
-        if (sequence == nullptr || sequence->getSegmentCount() == 0)
+        if (sequence == nullptr || sequence->getWordCount() == 0)
         {
              if (audioSource->isSampleAccessEnabled())
              {
-                 TranscriptionJob job;
-                 job.sourceID = id;
-                 job.sourcePtr = audioSource;
-                 DBG ("VoxScriptDocumentController: Enqueuing transcription (via PlaybackRegion creation)");
-                 jobQueue.enqueueTranscription(job);
+                 // Delegate to main enqueue method to reuse safe extraction logic
+                 enqueueTranscriptionForSource(audioSource);
              }
         }
     }
     
+    // Mission 4: Check for deferred updates
+    if (storeDirty.exchange(false))
+        notifyTranscriptionUpdated(nullptr);
+
     return new juce::ARAPlaybackRegion (modification, hostRef);
 }
 
@@ -1102,6 +523,8 @@ void VoxScriptDocumentController::enqueueTranscriptionForSource(juce::ARAAudioSo
 {
     if (source == nullptr) return;
     
+    ensureTranscriptionInfraInitialised();
+
     // Check sample access
     if (!source->isSampleAccessEnabled())
     {
@@ -1111,17 +534,36 @@ void VoxScriptDocumentController::enqueueTranscriptionForSource(juce::ARAAudioSo
     
     AudioSourceID id = documentStore.getOrCreateAudioSourceID(source);
     
-    TranscriptionJob job;
-    job.sourceID = id;
-    job.sourcePtr = source;
+    // Ensure caching (good practice)
+    audioCache.ensureCached(source, source);
     
-    DBG ("VoxScriptDocumentController: Enqueuing transcription request for source " + juce::String(id));
-    jobQueue.enqueueTranscription(job);
+    // Extract to temp WAV immediately
+    juce::File jobFile = AudioExtractor::extractToTempWAV(source, audioCache);
+    
+    if (jobFile.existsAsFile())
+    {
+        TranscriptionJob job;
+        job.sourceID = id;
+        job.audioFile = jobFile;
+        
+        DBG ("VoxScriptDocumentController: Enqueuing transcription request (safe file) for source " + juce::String(id));
+        jobQueue.enqueueTranscription(job);
+    }
+    else
+    {
+         DBG("VoxScriptDocumentController: Failed to create temp job file");
+    }
 }
 
 void VoxScriptDocumentController::addListener (Listener* listener)
 {
     listeners.add (listener);
+    
+    // Mission 3: Late initialization hack
+    // Since we avoid complex constructor overriding, we can lazy-init the specific components here
+    // But better to just assume jobQueue is ready (default constructor).
+    // We just need to ensure initialise() is called.
+    // Initialization check?
 }
 
 void VoxScriptDocumentController::removeListener (Listener* listener)
@@ -1132,112 +574,4 @@ void VoxScriptDocumentController::removeListener (Listener* listener)
 } // namespace VoxScript
 ```
 
-### Source/ara/VoxScriptAudioSource.h
-```cpp
-#pragma once
-
-#include <JuceHeader.h>
-#include "../transcription/VoxSequence.h"
-
-namespace VoxScript
-{
-
-// Forward declaration to avoid circular dependency
-class VoxScriptDocumentController;
-
-// --- FIX: INHERIT FROM juce::ARAAudioSource ONLY ---
-class VoxScriptAudioSource : public juce::ARAAudioSource
-{
-public:
-    // Constructor
-    VoxScriptAudioSource(juce::ARADocument* document, ARA::ARAAudioSourceHostRef hostRef);
-    
-    ~VoxScriptAudioSource() override;
-
-    // ARA override - called when audio source properties are finalized
-    void notifyPropertiesUpdated() noexcept;
-    
-    // Phase III: Trigger transcription with controller (called from DocumentController)
-    void triggerTranscriptionWithController(VoxScriptDocumentController* controller);
-    
-    juce::String getTranscriptionStatus() const { return transcriptionStatus; }
-
-private:
-    // Phase III: Transcription state
-    // We keep status string for debugging, but actual transcription is in Store
-    juce::String transcriptionStatus = "Idle";
-};
-
-} // namespace VoxScript
-```
-
-### Source/ara/VoxScriptAudioSource.cpp
-```cpp
-/*
-  ==============================================================================
-    VoxScriptAudioSource.cpp
-    
-    Implementation of the ARA Audio Source wrapper.
-    Phase III: Added auto-transcription triggering via JobQueue.
-    Mission 3: Isolate Whisper - Removed internal threading.
-  ==============================================================================
-*/
-
-#include "VoxScriptAudioSource.h"
-#include "VoxScriptDocumentController.h"
-#include "../util/VoxLogger.h"
-
-namespace VoxScript
-{
-
-VoxScriptAudioSource::VoxScriptAudioSource (juce::ARADocument* document,
-                                           ARA::ARAAudioSourceHostRef hostRef)
-    : juce::ARAAudioSource (document, hostRef)
-{
-    DBG ("VoxScriptAudioSource: Created");
-}
-
-VoxScriptAudioSource::~VoxScriptAudioSource()
-{
-    // Cleanup handled by DocumentController::doDestroyAudioSource
-    DBG ("VoxScriptAudioSource: Destroyed");
-}
-
-void VoxScriptAudioSource::notifyPropertiesUpdated() noexcept
-{
-    DBG ("VoxScriptAudioSource: Properties updated");
-    
-    // Check if sample access is available
-    if (!isSampleAccessEnabled())
-    {
-        transcriptionStatus = "Waiting for access...";
-        return;
-    }
-    
-    // Trigger transcription via controller
-    auto* docController = dynamic_cast<VoxScriptDocumentController*>(getDocumentController());
-    
-    if (docController != nullptr)
-    {
-        triggerTranscriptionWithController(docController);
-    }
-}
-
-void VoxScriptAudioSource::triggerTranscriptionWithController(VoxScriptDocumentController* docController)
-{
-    if (docController == nullptr) return;
-    
-    if (isSampleAccessEnabled())
-    {
-        transcriptionStatus = "Queued";
-        docController->enqueueTranscriptionForSource(this);
-        DBG ("VoxScriptAudioSource: Request queued via controller");
-    }
-    else
-    {
-        transcriptionStatus = "Waiting for access...";
-    }
-}
-
-} // namespace VoxScript
-```
+**Implementer Stopped.**

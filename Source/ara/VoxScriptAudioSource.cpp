@@ -30,22 +30,22 @@ VoxScriptAudioSource::~VoxScriptAudioSource()
 
 void VoxScriptAudioSource::notifyPropertiesUpdated() noexcept
 {
-    DBG ("VoxScriptAudioSource: Properties updated");
+    // M4: Strict gating to prevent crashes on insert/delete
     
-    // Check if sample access is available
-    if (!isSampleAccessEnabled())
-    {
-        transcriptionStatus = "Waiting for access...";
-        return;
-    }
+    // 1. Prevent calls during static shutdown
+    if (juce::MessageManager::getInstanceWithoutCreating() == nullptr) return;
+
+    // 2. Prevent calls before sample access (ARA safety)
+    if (!isSampleAccessEnabled()) return;
     
-    // Trigger transcription via controller
     auto* docController = dynamic_cast<VoxScriptDocumentController*>(getDocumentController());
     
-    if (docController != nullptr)
-    {
-        triggerTranscriptionWithController(docController);
-    }
+    // 3. Prevent calls before Controller is fully ready
+    if (docController == nullptr || !docController->isAraReadyForBackgroundWork()) 
+        return;
+
+    DBG ("VoxScriptAudioSource: Properties updated - Triggering Transcription");
+    triggerTranscriptionWithController(docController);
 }
 
 void VoxScriptAudioSource::triggerTranscriptionWithController(VoxScriptDocumentController* docController)

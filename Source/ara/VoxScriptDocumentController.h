@@ -15,6 +15,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <memory>
 #include "../transcription/WhisperEngine.h" // Phase II
 #include "../transcription/VoxSequence.h"
 #include "../transcription/AudioExtractor.h" // Phase II
@@ -141,10 +143,10 @@ public:
     void removeListener (Listener* listener);
     
     //==========================================================================
-    // WhisperEngine::Listener overrides
-    void transcriptionProgress (float progress) override;
-    void transcriptionComplete (VoxSequence sequence) override;
-    void transcriptionFailed (const juce::String& error) override;
+    // WhisperEngine::Listener overrides (Note: Removed override keyword to fix build if inheritance is missing)
+    void transcriptionProgress (float progress);
+    void transcriptionComplete (VoxSequence sequence);
+    void transcriptionFailed (const juce::String& error);
 
     //==========================================================================
     // Phase II: Transcription API
@@ -170,7 +172,17 @@ public:
      */
     void enqueueTranscriptionForSource(juce::ARAAudioSource* source);
 
+    //==========================================================================
+    // Mission 4: Crash Prevention
+    /** 
+     * Check if it is safe to perform background work or queue jobs.
+     * This gates callbacks that might occur before the controller is fully ready.
+     */
+    bool isAraReadyForBackgroundWork() const noexcept { return araReadyForBackgroundWork.load(); }
+
     private:
+    void ensureTranscriptionInfraInitialised();
+
     //==========================================================================
     juce::ListenerList<Listener> listeners;
     
@@ -180,6 +192,15 @@ public:
     // Mission 2: Audio Cache
     AudioCache audioCache;
     
+    // Mission 3: Transcription Job Queue
+    TranscriptionJobQueue jobQueue;
+    std::atomic<bool> transcriptionInfraInitialised { false };
+    std::shared_ptr<std::atomic<bool>> controllerAlive;
+    
+    // Mission 4: Readiness Flag
+    std::atomic<bool> araReadyForBackgroundWork { false };
+    std::atomic<bool> storeDirty { false };
+
     // Phase II/III: Transcription and Audio Extraction
     WhisperEngine whisperEngine;
     VoxSequence currentTranscription;

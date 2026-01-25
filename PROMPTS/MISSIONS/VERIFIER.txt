@@ -1,0 +1,23 @@
+Verifier Prompt (Paste-Ready)
+
+Return only: PASS or FAIL, then a short bullet list of evidence (max 8 bullets). No markdown.
+
+Verify hallucination-reduction patch.
+	1.	Build Debug:
+rm -rf build-Debug && mkdir build-Debug && cd build-Debug && cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug .. && ninja
+	2.	Build Release:
+rm -rf build-Release && mkdir build-Release && cd build-Release && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release .. && ninja
+	3.	Static checks in Source/transcription/WhisperEngine.cpp:
+
+	•	Confirm whisper_full_default_params uses WHISPER_SAMPLING_BEAM_SEARCH (not GREEDY)
+	•	Confirm initial_prompt no longer contains “[LYRICS]”
+	•	Confirm no_speech_thold is 0.6f
+	•	Confirm logprob_thold is <= -1.0f (more conservative than -0.5f)
+	•	Confirm post-run guard exists: if whisper_full_n_segments(ctx) == 0 -> returns empty sequence
+
+	4.	If VAD was added:
+
+	•	Confirm it compiles (fields exist) and is enabled
+	•	If fields did not exist, confirm no broken/ifdef mess was introduced
+
+PASS only if both builds succeed and all static checks pass.

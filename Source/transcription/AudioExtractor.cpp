@@ -40,7 +40,7 @@ juce::File AudioExtractor::extractToTempWAV (juce::ARAAudioSource* araSource,
         return juce::File();
     }
     
-    const CachedAudio* cached = audioCache.get(araSource);
+    auto cached = audioCache.get(araSource);
     if (cached == nullptr)
     {
         DBG ("AudioExtractor: Cache retrieval failed");

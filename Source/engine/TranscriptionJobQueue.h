@@ -15,7 +15,9 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "../transcription/WhisperEngine.h"
+
+#include <memory>
+#include <atomic>
 #include "../ara/VoxScriptDocumentStore.h"
 #include <deque>
 #include <mutex>
@@ -30,8 +32,7 @@ namespace VoxScript
 struct TranscriptionJob
 {
     AudioSourceID sourceID;
-    juce::File audioFile; // Optional: for file-based transcription
-    juce::ARAAudioSource* sourcePtr = nullptr; // Optional: process directly from ARA source
+    juce::File audioFile; // Independent file path
     
     // Equality operator for cancellation logic
     bool operator== (const TranscriptionJob& other) const
@@ -53,7 +54,7 @@ public:
     TranscriptionJobQueue();
     ~TranscriptionJobQueue() override;
 
-    void initialise(VoxScriptDocumentStore* store, WhisperEngine* engine);
+    void initialise(VoxScriptDocumentStore* store);
 
     /**
      * @brief Set callback to be invoked on the Message Thread when a transcription completes.
@@ -83,13 +84,15 @@ public:
 
 private:
     VoxScriptDocumentStore* documentStore = nullptr;
-    WhisperEngine* whisperEngine = nullptr;
+
 
     std::mutex queueMutex;
     std::condition_variable queueCV;
     std::deque<TranscriptionJob> jobQueue;
     
     std::function<void(AudioSourceID)> completionCallback;
+    
+    std::shared_ptr<std::atomic<bool>> aliveFlag;
     
     bool stopRequested = false;
 

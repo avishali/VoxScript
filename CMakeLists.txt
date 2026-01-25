@@ -286,6 +286,8 @@ target_sources(${PLUGIN_NAME}
         # Mission 2: Audio Cache
         Source/engine/AudioCache.cpp
         Source/engine/AudioCache.h
+        # Mission 3: Transcription Job Queue
+        Source/engine/TranscriptionJobQueue.cpp
         # Utilities - ADD THIS SECTION
         Source/util/VoxLogger.h
         
